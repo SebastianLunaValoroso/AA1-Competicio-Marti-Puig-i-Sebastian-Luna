@@ -6,7 +6,8 @@ Ha de contenir tots els scripts utilitzats per visualitzar les dades, entremanet
 
 ## Submissions to Kaggle
 
-El fitxer ha de tenir exactament 2 columnes: 
+El fitxer ha de tenir exactament 2 columnes:
+ 
 • ID: index corresponent a cadascuna de les mostres de test_nolabels.csv.  
 • POSITION: clase predita (0 a 9, corresponent a la posició predita).
 
