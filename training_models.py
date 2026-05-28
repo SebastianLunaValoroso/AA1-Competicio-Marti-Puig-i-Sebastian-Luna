@@ -44,7 +44,7 @@ csi
 # I0_2 Q0_2 ... I63_2 Q63_2 
 # 
 # on In_X: Valor In-phase del subcarrier n-èssim $(0 \leq n \leq 63)$ a la antena X (X = 1 o 2) 
-# i Qn_X: Valor Quadraturedel subcarrier n-èssim a la antena X
+# i Qn_X: Valor Quadrature del subcarrier n-èssim a la antena X
 # - `position` (label): int8, valor entre 0 i 9, corresponent a la posició del target device (Variable Target)
 
 # %%
@@ -65,6 +65,9 @@ csi['position'].value_counts() #el nombre de mostres a cada posicio es similar
 sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position"]], hue='position',palette="coolwarm") #no seleccionem ara les RAW CSI variables
 
 # %% [markdown]
+# podriem treure rssi1 o rssi2 ja que correlan linealment?
+
+# %% [markdown]
 # ## Dataset Cleaning
 # - Eliminar Outliers
 # - Reduir Variables
@@ -81,6 +84,9 @@ csi.boxplot(column = "rssi1", ax=axes[0])
 csi.hist(column = "rssi1", ax = axes[1])
 
 # %%
+csi[csi.rssi1 < -95] #eliminar observacio? cal tenir en compte que esta bastant a prop del -95
+
+# %%
 #Histograma i Boxplot de rssi2
 fig, axes = plt.subplots(1,2, gridspec_kw={'width_ratios':[1,4]}, figsize=(9,5))
 csi.boxplot(column = "rssi2", ax=axes[0])
@@ -92,11 +98,23 @@ fig, axes= plt.subplots(1,2, gridspec_kw={'width_ratios': [1, 4]}, figsize=(9,5)
 csi.boxplot(column='aoa',ax=axes[0])
 csi.hist(column='aoa', ax=axes[1])
 
-# %% [markdown]
-# Semblaría que no hi han outliers per aquestes variables
+# %%
+#AOA es l'angle en graus multiplicat per 100, sabem que va de -90º a 90º
+csi.aoa.max()
+
+
+# %%
+csi.aoa.min()
 
 # %% [markdown]
+# Els valors minims y maxims d'aoa no sorten del interval $[-90º,90º]$.
+# 
+# Semblaria que no hi han outliers en aquestes variables.
+# 
 # Estudiem les dades RAW CSI:
+
+# %% [markdown]
+# ### Eliminar Outliers i Variables de RAW CSI
 
 # %%
 carriers_0:list[str] = []
@@ -117,7 +135,54 @@ len(carriers_0)
 # %% [markdown]
 # Aquestes variables son sempre 0, les podem treure perquè no aportan informació.
 # 
-# Ara estudiem les que no ho son:
+
+# %%
+csi_filtered = csi.drop(columns=carriers_0)
+csi_filtered.describe()
+
+# %% [markdown]
+# Ara estudiem les que no ho son.
+# 
+# Segons la informació que hem trobat sobre aquestes dades d'[OFDM]("https://www.cwnp.com/understanding-ofdm-part-2-2/"):
+# 
+# Es tracta de nombres complexos de la forma $H= I + iQ$, on $i^2=-1$.
+# 
+# Anem sustituir les variables I, Q per A (módul) i Theta (angle):
+# 
+
+# %%
+for k in (1,2):
+    j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)]
+    for j in j_iter:
+        mod:str = f"A{j}_{k}"
+        angl:str = f"O{j}_{k}"
+        i_str = f"I{j}_{k}"
+        q_str = f"Q{j}_{k}"
+        complex = csi_filtered[i_str] + csi_filtered[q_str] * 1j
+        np.angle(complex)
+        
+        csi_filtered[mod] = np.abs(complex)
+        csi_filtered[angl] = np.angle(complex)
+        csi_filtered.drop(columns=[i_str,q_str],inplace=True)
+
+# %%
+csi_filtered.describe()
+
+# %%
+moduls_1 = ["position"]+ [f"A{j}_1" for j in j_iter]
+moduls_1[:len(moduls_1)//2]
+
+# %%
+sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palette="coolwarm",corner=True)
+
+# %%
+
+
+# %%
+
+
+# %%
+
 
 # %%
 sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position", "I1_1", "Q1_1", "I63_1", "Q63_1", "I1_2", "Q1_2", "I63_2", "Q63_2"]], hue='position',palette="coolwarm")
@@ -127,7 +192,6 @@ sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position", "I1_1", "Q1_1
 
 # %%
 I_1 = ["position"] + [f"I{i}_1" for i in range(1,27)] + [f"I{i}_1" for i in range(38,64)]
-I_1
 
 # %%
 sn.pairplot(data=csi[I_1])
@@ -138,8 +202,8 @@ sn.pairplot(data=csi[I_1])
 # %%
 #podria ser que I_x fossi una time series d'algo del wifi?
 
-# %%
-
+# %% [markdown]
+# ### Escalar les dades
 
 # %%
 
