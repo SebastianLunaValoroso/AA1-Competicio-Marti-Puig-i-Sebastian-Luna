@@ -176,31 +176,70 @@ moduls_1[:len(moduls_1)//2]
 sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palette="coolwarm",corner=True)
 
 # %%
-
-
-# %%
-
+len(moduls_1)
 
 # %%
 
 
 # %%
-sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position", "I1_1", "Q1_1", "I63_1", "Q63_1", "I1_2", "Q1_2", "I63_2", "Q63_2"]], hue='position',palette="coolwarm")
+#Algorisme com Sieve d' Eratosthenes pero per descartar les variables
+def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_inplace:bool=False)->list[str]: #O(n_vars**2 * columns(df) * rows(df))
+    """Devuelve las variables que poseen una abs(correlacion) < min_corr.
+    
+    :param: drop_inplace: si es True, entonces elimina las variables correlacionadas
+    """
+    n_vars:int = len(vars)
+    vars_select:list[bool] = [True for _ in range(n_vars)]
+    for i in range(n_vars): #Bucle que calcula la correlacio entre variables i selecciona les 'no correlades' (corr < min_corr)
+        var_i = vars[i]
+        if vars_select[i]:
+            for j in range(i+1,n_vars):
+                if vars_select[j]:
+                    var_j = vars[j]
+                    corr = df[var_i].corr(df[var_j])
+                    vars_select[j] = np.abs(corr) < min_corr
+    if drop_inplace:
+        df.drop(columns=[vars[j] for j in range(n_vars) if not(vars_select[j])])
+    return [vars[j] for j in range(n_vars) if vars_select[j]]
+
+
+# %%
+uncorr_moduls_1 = uncorr_vars(csi_filtered,moduls_1[1:]) #de 52 variables incialment ens quedem amb 5
+uncorr_moduls_1
+
+# %%
+moduls_2 = [f"A{j}_2" for j in j_iter]
+uncorr_moduls_2 = uncorr_vars(csi_filtered,moduls_2) # de 52 variables incialment ens quedem amb 12
+uncorr_moduls_2
+
+# %%
+uncorr_moduls = uncorr_vars(csi_filtered,uncorr_moduls_1 + uncorr_moduls_2)
+uncorr_moduls #pasem de 104 variables originalment a 17
+
+# %%
+len(uncorr_moduls)
+
+# %%
+angl_1 = [f"O{j}_1" for j in j_iter]
+angl_2 = [f"O{j}_2" for j in j_iter]
+
+# %%
+uncorr_angl_1 = uncorr_vars(csi_filtered,angl_1) # de 52 vars pasem a 2
+uncorr_angl_1
+
+# %%
+uncorr_angl_2 = uncorr_vars(csi_filtered,angl_2) # de 52 vars pasem a 1
+uncorr_angl_2
+
+# %%
+uncorr_raw_csi = uncorr_moduls + uncorr_angl_1 + uncorr_angl_2
+len(uncorr_raw_csi)
+
+# %%
+len(uncorr_vars(csi_filtered,uncorr_raw_csi)) #comprobacio final que aquestes variables no estan correlades
 
 # %% [markdown]
-# Observem algunes relacions lineals entre variables I_x_n, anem a fer un correlation plot de totes les variables I_x_1 $\neq 0$
-
-# %%
-I_1 = ["position"] + [f"I{i}_1" for i in range(1,27)] + [f"I{i}_1" for i in range(38,64)]
-
-# %%
-sn.pairplot(data=csi[I_1])
-
-# %% [markdown]
-# Observem que per les I_x_1 que son aprop (diferencia de la x no molt gran), la relació sembla ser lineal, però quan es comença a allunyar aquesta relació lineal es perd.
-
-# %%
-#podria ser que I_x fossi una time series d'algo del wifi?
+# Hem aconseguit reduir les 256 variables Raw CSI incialment presents per 20 variables.
 
 # %% [markdown]
 # ### Escalar les dades
@@ -273,5 +312,27 @@ csi_train, csi_test = train_test_split(csi, test_size=0.25, random_state=42, str
 
 # %%
 
+
+# %% [markdown]
+# # Temporal Cache de Dades (eliminar al final)
+# A continuacio hi han alguns plots que vam fer durant l'AED però qu'al final no vam utilitzar 
+
+# %%
+sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position", "I1_1", "Q1_1", "I63_1", "Q63_1", "I1_2", "Q1_2", "I63_2", "Q63_2"]], hue='position',palette="coolwarm")
+
+# %% [markdown]
+# Observem algunes relacions lineals entre variables I_x_n, anem a fer un correlation plot de totes les variables I_x_1 $\neq 0$
+
+# %%
+I_1 = ["position"] + [f"I{i}_1" for i in range(1,27)] + [f"I{i}_1" for i in range(38,64)]
+
+# %%
+sn.pairplot(data=csi[I_1])
+
+# %% [markdown]
+# Observem que per les I_x_1 que son aprop (diferencia de la x no molt gran), la relació sembla ser lineal, però quan es comença a allunyar aquesta relació lineal es perd.
+
+# %%
+#podria ser que I_x fossi una time series d'algo del wifi?
 
 
