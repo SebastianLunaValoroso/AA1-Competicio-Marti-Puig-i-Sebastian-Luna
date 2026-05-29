@@ -11,6 +11,9 @@ import seaborn as sn
 import pandas as pd
 from collections import Counter
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearDiscriminantAnalysis
+from sklearn.metrics import accuracy_score, f1_score, ConfusionMatrixDisplay, confusion_matrix
 # from IPython.core.interactiveshell import InteractiveShell
 # InteractiveShell.ast_node_interactivity = "all"
 
@@ -72,6 +75,7 @@ sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position"]], hue='positi
 # - Eliminar Outliers
 # - Reduir Variables
 # - Missing Values
+# - Afegir o Modificar Variables
 # - Escalar Dades
 # - Balancejar Dataset (si no ho está)
 
@@ -254,49 +258,157 @@ csi_filtered.drop(columns=vars_to_drop,inplace=True)
 csi_filtered.describe()
 
 # %%
+#Calculem el nombre de missing Values
+csi_filtered.isna().sum()
 
-
-# %%
-
-
-# %%
-
+# %% [markdown]
+# Com Pandas no detecta missing values i no hem trobat outliers o valors extranys, concluim que no hi han missing values.
 
 # %% [markdown]
 # ### Escalar les dades
 
+# %% [markdown]
+# Primer, seq_ctrl es una seqüència de nombres per identificar el csi codificada com uint16, es a dir qu'agafa valors entre 0 i 65535. En principi, seq_ctrl no té un significat ordinal (un seq_ctrl 2000 no es més important qu'un 0) aleshores s'ha de tractar com variable categórica. Té massas categorías com per aplicar one-hot enconding, però si assumim que té propietats ciclicas (desprès d'una seqüència 65535 torna a hi haver un 0) podriem crear dues variables de la forma:
+# 
+# seq_ctrl_sin $=sin(2 \cdot \pi \cdot i /65535)$, amb $i=$ seq_ctrl
+# 
+# seq_ctrl_cos $=cos(2 \cdot \pi \cdot i /65535)$, amb $i=$ seq_ctrl
+# 
+# Com a segona opció, podriem considerar simplement que seq_ctrl no aporta informació sobre la posició i aleshores sería millor eliminarla.
+
+# %%
+seq_ctrl_array = csi_filtered["seq_ctrl"] #guardem el seq_ctrl per desprès fer canvis, de moment ho eliminarem de csi_filtered
+
+# %%
+csi_filtered = csi_filtered.drop(columns="seq_ctrl")
+
+# %%
+def scaling_preprocessing(X, scaler=None)->tuple[pd.DataFrame,MinMaxScaler]: #funcio extraida de la practica 4 Linear Regression
+    """Escala los datos numericos de X y los devuelve escalados y con su escalador.
+    
+    Prec: X no debe tener variables categoricas ni NA's
+
+    :param: scaler: se debe indicar el utilizado en los datos de train cuando se utilicen los de test
+    """
+    print('Original shape:{}'.format(X.shape))
+    categorical_columns = X.dtypes[X.dtypes == 'category'].index.values
+    numerical_columns = [c for c in X.columns if c not in categorical_columns]
+    # Solo escalamos la columna numerica
+    numerical_columns = [c for c in X.columns if c not in categorical_columns]
+    if scaler is None:
+        # Solo creamos el scaler para entrenarse con datos de train (para que no haya fugas)
+        scaler = MinMaxScaler()
+        X[numerical_columns] = scaler.fit_transform(X[numerical_columns])
+    else:
+        X[numerical_columns] = scaler.transform(X[numerical_columns])
+
+    #Aqui podriam afegir el escalat de la variable categorica
+
+    print('New shape:{}'.format(X.shape))
+    return X, scaler
+
+
+# %%
+X = csi_filtered.loc[:,csi_filtered.columns != 'position']
+y = csi_filtered['position']
+
+# %%
+X_train, X_test, y_train, y_test = train_test_split(X,y, test_size=0.25, random_state=42, stratify=csi_filtered['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
+
+# %%
+X_train, scaler = scaling_preprocessing(X_train)
+X_test, _ = scaling_preprocessing(X_test,scaler)
+
+# %%
+X_train.describe()
+
 # %%
 
 
-# %%
-
-
-# %%
-
+# %% [markdown]
+# ### Balancejar el dataset
+# Com que hem considerat qu'el dataset estaba balancejat perquè no hi havien grans diferencies per les classes, amb això acabem el Dataset Cleaning, ara comencarem a entrenar models.
 
 # %%
 
 
-# %%
-
-
-# %%
-
+# %% [markdown]
+# ### Funcions per l'exportació a Kaggle
 
 # %%
+#funcions per transformar csi_final_test per que sigui com X i y (trasnformacions i reduccions de variables inclosas)
 
 
 # %%
-csi_train, csi_test = train_test_split(csi, test_size=0.25, random_state=42, stratify=csi['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
+#funcions per escriure el resultat a un fitxer
+def output_submission(y:np.ndarray,filename:str="out")->None:
+    """Escribe y en el fichero filename.csv para la submission. No hay que incluir '.csv' en filename"""
+    filename= filename + ".csv"
+    with open(filename,"w") as f:
+        print("ID,POSITION",file=f)
+        for i in range(len(y)):
+            print(f"{i},{y[i]}",file=f)
+    print("Fitxer d'output generat")
+    
 
 # %% [markdown]
 # ## 1.LDA
+
+# %%
+# Train LDA
+lda = LinearDiscriminantAnalysis()
+lda.fit(X_train, y_train)
+
+# %%
+#Afegir validacio
+
+# %%
+y_test_lda_pred = lda.predict(X_test)
+
+# %%
+#Metriques
+accuracy_lda = accuracy_score(y_test, y_test_lda_pred)
+f1_lda = f1_score(y_test, y_test_lda_pred,average='macro')
+print(f"LDA test accuracy: {accuracy_lda} \n LDA test f1-score: {f1_lda}")
+
+# %%
+cm_lda = confusion_matrix(y_test, y_test_lda_pred)
+disp_lda = ConfusionMatrixDisplay(cm_lda)
+fig, axs = plt.subplots(figsize=(12, 4))
+
+disp_lda.plot(ax=axs)
+
+axs.set_title('LDA')
+
+# %%
+output_submission(y_test_lda_pred,filename="lda") #exemple de com generar un fitxer de sortida amb el output
+
+# %%
+
 
 # %%
 
 
 # %% [markdown]
 # ## 2.QDA
+
+# %%
+
+
+# %%
+
+
+# %%
+
+
+# %%
+
+
+# %%
+
+
+# %%
+
 
 # %%
 
