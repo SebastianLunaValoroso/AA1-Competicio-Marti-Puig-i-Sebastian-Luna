@@ -71,6 +71,7 @@ sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position"]], hue='positi
 # ## Dataset Cleaning
 # - Eliminar Outliers
 # - Reduir Variables
+# - Missing Values
 # - Escalar Dades
 # - Balancejar Dataset (si no ho está)
 
@@ -183,10 +184,10 @@ len(moduls_1)
 
 # %%
 #Algorisme com Sieve d' Eratosthenes pero per descartar les variables
-def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_inplace:bool=False)->list[str]: #O(n_vars**2 * columns(df) * rows(df))
+def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_out:bool=False)->list[str]: #O(n_vars**2 * rows(df))
     """Devuelve las variables que poseen una abs(correlacion) < min_corr.
     
-    :param: drop_inplace: si es True, entonces elimina las variables correlacionadas
+    :param: drop_out: si es True, entonces devuelve las variables correlacionadas que se tendrian que eliminar
     """
     n_vars:int = len(vars)
     vars_select:list[bool] = [True for _ in range(n_vars)]
@@ -198,8 +199,8 @@ def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_inplace:
                     var_j = vars[j]
                     corr = df[var_i].corr(df[var_j])
                     vars_select[j] = np.abs(corr) < min_corr
-    if drop_inplace:
-        df.drop(columns=[vars[j] for j in range(n_vars) if not(vars_select[j])])
+    if drop_out:
+        return [vars[j] for j in range(n_vars) if not(vars_select[j])]
     return [vars[j] for j in range(n_vars) if vars_select[j]]
 
 
@@ -238,11 +239,34 @@ len(uncorr_raw_csi)
 # %%
 len(uncorr_vars(csi_filtered,uncorr_raw_csi)) #comprobacio final que aquestes variables no estan correlades
 
+# %%
+vars_to_drop = uncorr_vars(csi_filtered,moduls_1[1:] + moduls_2 + angl_1 + angl_2,drop_out=True) #fem el drop de les variables no correlades
+csi_filtered.drop(columns=vars_to_drop,inplace=True)
+
+
 # %% [markdown]
 # Hem aconseguit reduir les 256 variables Raw CSI incialment presents per 20 variables.
 
 # %% [markdown]
+# ### Missing Values
+
+# %%
+csi_filtered.describe()
+
+# %%
+
+
+# %%
+
+
+# %%
+
+
+# %% [markdown]
 # ### Escalar les dades
+
+# %%
+
 
 # %%
 
