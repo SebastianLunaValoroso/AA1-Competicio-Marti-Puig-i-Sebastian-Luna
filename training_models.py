@@ -14,6 +14,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearDiscriminantAnalysis
 from sklearn.metrics import accuracy_score, f1_score, ConfusionMatrixDisplay, confusion_matrix
+from sklearn.feature_selection import mutual_info_classif
+from sklearn.decomposition import PCA
 # from IPython.core.interactiveshell import InteractiveShell
 # InteractiveShell.ast_node_interactivity = "all"
 
@@ -56,7 +58,6 @@ print(f"El dataset té {csi_shape[0]} mostres i {csi_shape[1]} attributs")
 
 # %%
 csi.describe()
-
 
 # %%
 csi['seq_ctrl'].value_counts() #veiem que hi han sequencies que es repeteixen
@@ -107,7 +108,6 @@ csi.hist(column='aoa', ax=axes[1])
 #AOA es l'angle en graus multiplicat per 100, sabem que va de -90º a 90º
 csi.aoa.max()
 
-
 # %%
 csi.aoa.min()
 
@@ -133,7 +133,6 @@ for i in (1,2):
             carriers_0.append(subcarrier_q)
 print(carriers_0)
 
-
 # %%
 len(carriers_0)
 
@@ -143,6 +142,7 @@ len(carriers_0)
 
 # %%
 csi_filtered = csi.drop(columns=carriers_0)
+csi_pca = csi.drop(columns=carriers_0)
 csi_filtered.describe()
 
 # %% [markdown]
@@ -184,7 +184,24 @@ sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palet
 len(moduls_1)
 
 # %%
+def min_mutual_info(df:pd.DataFrame,min_mut_infor:float=0.1)->list[str]:
+    """
+    Retorna les variables que no aporten prou informació sobre la variable objectiu
+    """
+    X = df.drop(columns=["position"])
+    y = df["position"]
+    puntuacions_mi = mutual_info_classif(X, y, random_state=42)
+    cols = []
+    for i in range(len(puntuacions_mi)):
+        if puntuacions_mi[i] < min_mut_infor:
+            cols.append(X.columns[i])
+    return cols
 
+# %%
+vars_to_drop = min_mutual_info(csi_filtered)
+
+# %%
+csi_filtered.drop(columns=vars_to_drop, inplace=True)
 
 # %%
 #Algorisme com Sieve d' Eratosthenes pero per descartar les variables
@@ -207,49 +224,16 @@ def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_out:bool
         return [vars[j] for j in range(n_vars) if not(vars_select[j])]
     return [vars[j] for j in range(n_vars) if vars_select[j]]
 
-
 # %%
-uncorr_moduls_1 = uncorr_vars(csi_filtered,moduls_1[1:]) #de 52 variables incialment ens quedem amb 5
-uncorr_moduls_1
-
-# %%
-moduls_2 = [f"A{j}_2" for j in j_iter]
-uncorr_moduls_2 = uncorr_vars(csi_filtered,moduls_2) # de 52 variables incialment ens quedem amb 12
-uncorr_moduls_2
-
-# %%
-uncorr_moduls = uncorr_vars(csi_filtered,uncorr_moduls_1 + uncorr_moduls_2)
-uncorr_moduls #pasem de 104 variables originalment a 17
-
-# %%
-len(uncorr_moduls)
-
-# %%
-angl_1 = [f"O{j}_1" for j in j_iter]
-angl_2 = [f"O{j}_2" for j in j_iter]
-
-# %%
-uncorr_angl_1 = uncorr_vars(csi_filtered,angl_1) # de 52 vars pasem a 2
-uncorr_angl_1
-
-# %%
-uncorr_angl_2 = uncorr_vars(csi_filtered,angl_2) # de 52 vars pasem a 1
-uncorr_angl_2
-
-# %%
-uncorr_raw_csi = uncorr_moduls + uncorr_angl_1 + uncorr_angl_2
-len(uncorr_raw_csi)
-
-# %%
-len(uncorr_vars(csi_filtered,uncorr_raw_csi)) #comprobacio final que aquestes variables no estan correlades
-
-# %%
-vars_to_drop = uncorr_vars(csi_filtered,moduls_1[1:] + moduls_2 + angl_1 + angl_2,drop_out=True) #fem el drop de les variables no correlades
+vars_to_drop = uncorr_vars(csi_filtered, csi_filtered.columns) #fem el drop de les variables no correlades
+vars_to_drop.remove("position")
 csi_filtered.drop(columns=vars_to_drop,inplace=True)
 
+# %%
+csi_filtered.describe()
 
 # %% [markdown]
-# Hem aconseguit reduir les 256 variables Raw CSI incialment presents per 20 variables.
+# Hem aconseguit reduir les 256 variables Raw CSI incialment presents a 38 variables.
 
 # %% [markdown]
 # ### Missing Values
@@ -277,10 +261,10 @@ csi_filtered.isna().sum()
 # Com a segona opció, podriem considerar simplement que seq_ctrl no aporta informació sobre la posició i aleshores sería millor eliminarla.
 
 # %%
-seq_ctrl_array = csi_filtered["seq_ctrl"] #guardem el seq_ctrl per desprès fer canvis, de moment ho eliminarem de csi_filtered
+#seq_ctrl_array = csi_filtered["seq_ctrl"] #guardem el seq_ctrl per desprès fer canvis, de moment ho eliminarem de csi_filtered
 
 # %%
-csi_filtered = csi_filtered.drop(columns="seq_ctrl")
+#csi_filtered = csi_filtered.drop(columns="seq_ctrl")
 
 # %%
 def scaling_preprocessing(X, scaler=None)->tuple[pd.DataFrame,MinMaxScaler]: #funcio extraida de la practica 4 Linear Regression
@@ -307,7 +291,6 @@ def scaling_preprocessing(X, scaler=None)->tuple[pd.DataFrame,MinMaxScaler]: #fu
     print('New shape:{}'.format(X.shape))
     return X, scaler
 
-
 # %%
 X = csi_filtered.loc[:,csi_filtered.columns != 'position']
 y = csi_filtered['position']
@@ -323,7 +306,9 @@ X_test, _ = scaling_preprocessing(X_test,scaler)
 X_train.describe()
 
 # %%
-
+pca = PCA(n_components=0.95)
+X_train_pca = pca.fit_transform(X_train)
+X_test_pca = pca.transform(X_test)
 
 # %% [markdown]
 # ### Balancejar el dataset
@@ -338,7 +323,6 @@ X_train.describe()
 # %%
 #funcions per transformar csi_final_test per que sigui com X i y (trasnformacions i reduccions de variables inclosas)
 
-
 # %%
 #funcions per escriure el resultat a un fitxer
 def output_submission(y:np.ndarray,filename:str="out")->None:
@@ -349,7 +333,9 @@ def output_submission(y:np.ndarray,filename:str="out")->None:
         for i in range(len(y)):
             print(f"{i},{y[i]}",file=f)
     print("Fitxer d'output generat")
-    
+
+# %%
+
 
 # %% [markdown]
 # ## 1.LDA
@@ -359,11 +345,13 @@ def output_submission(y:np.ndarray,filename:str="out")->None:
 lda = LinearDiscriminantAnalysis()
 lda.fit(X_train, y_train)
 
+
 # %%
 #Afegir validacio
 
 # %%
 y_test_lda_pred = lda.predict(X_test)
+
 
 # %%
 #Metriques
@@ -384,7 +372,11 @@ axs.set_title('LDA')
 output_submission(y_test_lda_pred,filename="lda") #exemple de com generar un fitxer de sortida amb el output
 
 # %%
-
+lda.fit(X_train_pca, y_train)
+y_test_lda_pred = lda.predict(X_test_pca)
+accuracy_lda = accuracy_score(y_test, y_test_lda_pred)
+f1_lda = f1_score(y_test, y_test_lda_pred,average='macro')
+print(f"LDA test accuracy: {accuracy_lda} \n LDA test f1-score: {f1_lda}")
 
 # %%
 
@@ -393,13 +385,16 @@ output_submission(y_test_lda_pred,filename="lda") #exemple de com generar un fit
 # ## 2.QDA
 
 # %%
-
-
-# %%
-
+qda = QuadraticDiscriminantAnalysis()
+qda.fit(X_train,y_train)
 
 # %%
+y_test_qda_pred = qda.predict(X_test)
 
+# %%
+accuracy_qda = accuracy_score(y_test, y_test_qda_pred)
+f1_qda = f1_score(y_test, y_test_qda_pred,average='macro')
+print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 
 # %%
 
