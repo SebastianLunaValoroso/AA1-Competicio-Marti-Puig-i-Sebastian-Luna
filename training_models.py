@@ -16,6 +16,7 @@ from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearD
 from sklearn.metrics import accuracy_score, f1_score, ConfusionMatrixDisplay, confusion_matrix
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 # from IPython.core.interactiveshell import InteractiveShell
 # InteractiveShell.ast_node_interactivity = "all"
 
@@ -306,9 +307,15 @@ X_test, _ = scaling_preprocessing(X_test,scaler)
 X_train.describe()
 
 # %%
-pca = PCA(n_components=0.95)
-X_train_pca = pca.fit_transform(X_train)
-X_test_pca = pca.transform(X_test)
+X_dirty = csi.loc[:,csi.columns != 'position']
+y_dirty = csi['position']
+X_train_dirty, X_test_dirty, y_train_dirty, y_test_dirty = train_test_split(X_dirty,y_dirty, test_size=0.25, random_state=42, stratify=csi['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
+X_train_dirty, scaler = scaling_preprocessing(X_train_dirty)
+X_test_dirty, _ = scaling_preprocessing(X_test_dirty,scaler)
+pca = PCA(n_components=0.99)
+X_train_pca = pca.fit_transform(X_train_dirty)
+X_test_pca = pca.transform(X_test_dirty)
+print(X_train_pca.shape)
 
 # %% [markdown]
 # ### Balancejar el dataset
@@ -397,10 +404,20 @@ f1_qda = f1_score(y_test, y_test_qda_pred,average='macro')
 print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 
 # %%
+cm_qda = confusion_matrix(y_test, y_test_lda_pred)
+disp_qda = ConfusionMatrixDisplay(cm_qda)
+fig, axs = plt.subplots(figsize=(12, 4))
 
+disp_qda.plot(ax=axs)
+
+axs.set_title('QDA')
 
 # %%
-
+qda.fit(X_train_pca, y_train)
+y_test_qda_pred = lda.predict(X_test_pca)
+accuracy_qda = accuracy_score(y_test, y_test_qda_pred)
+f1_qda = f1_score(y_test, y_test_qda_pred,average='macro')
+print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 
 # %%
 
@@ -437,6 +454,67 @@ print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 
 # %%
 
+
+# %% [markdown]
+# ## 8.Random forest and Gradient boosting
+
+# %%
+rf_model = RandomForestClassifier(n_estimators=200, max_depth=30, random_state=42, n_jobs=-1)
+rf_model.fit(X_train, y_train)
+
+y_pred_rf = rf_model.predict(X_test)
+acc_rf = accuracy_score(y_test, y_pred_rf)
+f1_rf = f1_score(y_test, y_pred_rf, average='macro')
+
+# %%
+acc_rf
+
+
+
+# %%
+f1_rf
+
+# %%
+rf_model_pca = RandomForestClassifier(n_estimators=200, max_depth=30, random_state=42, n_jobs=-1)
+rf_model_pca.fit(X_train_pca, y_train)
+
+y_pred_rf_pca = rf_model_pca.predict(X_test_pca)
+acc_rf_pca = accuracy_score(y_test, y_pred_rf_pca)
+f1_rf_pca = f1_score(y_test, y_pred_rf_pca, average='macro')
+
+# %%
+acc_rf_pca
+
+# %%
+f1_rf_pca
+
+# %%
+gb_model = GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=3, random_state=42)
+gb_model.fit(X_train, y_train)
+
+y_pred_gb = gb_model.predict(X_test)
+acc_gb = accuracy_score(y_test, y_pred_gb)
+f1_gb = f1_score(y_test, y_pred_gb, average='macro')
+
+# %%
+acc_gb
+
+# %%
+f1_gb
+
+# %%
+gb_model_pca = GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=3, random_state=42)
+gb_model_pca.fit(X_train_pca, y_train)
+
+y_pred_gb_pca = gb_model_pca.predict(X_test_pca)
+acc_gb_pca = accuracy_score(y_test, y_pred_gb_pca)
+f1_gb_pca = f1_score(y_test, y_pred_gb_pca, average='macro')
+
+# %%
+acc_gb_pca
+
+# %%
+f1_gb_pca
 
 # %% [markdown]
 # ## 8.Mirar més métodes a la resta de transpas
