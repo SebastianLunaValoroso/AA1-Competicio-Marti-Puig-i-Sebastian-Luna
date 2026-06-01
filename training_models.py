@@ -17,6 +17,8 @@ from sklearn.metrics import accuracy_score, f1_score, ConfusionMatrixDisplay, co
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
 # from IPython.core.interactiveshell import InteractiveShell
 # InteractiveShell.ast_node_interactivity = "all"
 
@@ -429,7 +431,13 @@ print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 # ## 3.Naive-Bayes Classifier
 
 # %%
+nb = GaussianNB()
+nb.fit(X_train_pca, y_train)
+y_pred_nb = nb.predict(X_test_pca)
+accuracy_nb = accuracy_score(y_test, y_pred_nb)
 
+# %%
+accuracy_nb
 
 # %% [markdown]
 # ## 4.Neural Probabilistic Classifier
@@ -453,7 +461,18 @@ print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 # ## 7.SVM
 
 # %%
+svm = SVC(kernel='rbf', C=10.0, gamma='scale', random_state=42)
+svm.fit(X_train, y_train)
 
+y_pred_svm = svm.predict(X_test)
+accuracy_svm = accuracy_score(y_test, y_pred_svm)
+f1_svm = f1_score(y_test, y_pred_svm, average="macro")
+
+# %%
+accuracy_svm
+
+# %%
+f1_svm
 
 # %% [markdown]
 # ## 8.Random forest and Gradient boosting
