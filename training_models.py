@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sn
 import pandas as pd
 from collections import Counter
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_validate
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearDiscriminantAnalysis
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, ConfusionMatrixDisplay, confusion_matrix
@@ -495,9 +495,15 @@ lda = LinearDiscriminantAnalysis()
 lda.fit(X_train, y_train)
 
 # %%
-#Afegir validacio
+cross_val_results = pd.DataFrame(cross_validate(lda , X_train, y_train, cv = 5, 
+                            scoring = ['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'] )) #cv es el nom de folds de cross validation
+
+results_df.loc['LDA',:] = cross_val_results[['test_accuracy', 'test_f1_macro',
+       'test_precision_macro', 'test_recall_macro']].mean().values
+results_df #scores de validacio
 
 # %%
+#TEST (No Final), executar despres de validacio de tots els models
 y_test_lda_pred = lda.predict(X_test)
 
 # %%
@@ -533,10 +539,48 @@ sn.scatterplot(x= 0, y= 1, data = X_transformed, hue='labels',palette="coolwarm"
 # ## 2.QDA
 
 # %%
-qda = QuadraticDiscriminantAnalysis()
-qda.fit(X_train,y_train)
+#reg_param_values = [0, 0.0001, 0.001, 0.1, 1]
 
 # %%
+#Validacio d'hiperparametres
+reg_param_values = [0, 0.0001, 0.001, 0.1, 1]
+
+results_qda_df = pd.DataFrame(index=[], columns= ['reg_param', 'Accuracy', 'F1 Macro', 'Precision Macro', 'Recall Macro'])
+
+for i, reg_value in enumerate(reg_param_values):
+    qda = QuadraticDiscriminantAnalysis(reg_param=reg_value)
+    try:
+        cross_val_results = pd.DataFrame(cross_validate(qda , X_train, y_train, cv = 5, scoring = ['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'] ))
+    except: #per si es singular
+        continue
+    else:
+        results_qda_df.loc[f'{i}',:] = [reg_value] + list(cross_val_results[['test_accuracy', 'test_f1_macro',
+                                                                             'test_precision_macro', 'test_recall_macro']].mean().values)
+
+results_qda_df = results_qda_df.sort_values("Accuracy", ascending=False).reset_index(drop=True)
+results_qda_df
+
+# %%
+best_reg_param = results_qda_df["reg_param"][0]
+print(f"The best value for reg_param is {best_reg_param}.") #aquest valor es el bo, ull perque al df a vegades fa un round quan ho mostras
+
+# %%
+qda = QuadraticDiscriminantAnalysis(reg_param=best_reg_param)
+qda.fit(X_train, y_train)
+cm_qda = confusion_matrix(y_train, qda.predict(X_train))
+disp_qda = ConfusionMatrixDisplay(cm_qda)
+fig, axs = plt.subplots(figsize=(12, 4))
+
+disp_qda.plot(ax=axs)
+
+axs.set_title('QDA')
+
+# %%
+results_df.loc['QDA',:] = results_qda_df.loc[0, ['Accuracy', 'F1 Macro', 'Precision Macro', 'Recall Macro']]
+results_df
+
+# %%
+#TEST (No Final), executar despres de validacio de tots els models
 y_test_qda_pred = qda.predict(X_test)
 
 # %%
