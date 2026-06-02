@@ -25,6 +25,11 @@ from sklearn.naive_bayes import GaussianNB
 # Set the precision of the display to 3 decimal places
 pd.set_option('display.precision', 3)
 
+# %%
+#Constants
+SEED:int = 383006
+N_COMP:float = 0.99
+
 # %% [markdown]
 # ## Anàlisi Exploratori de les Dades (AED)
 
@@ -145,8 +150,19 @@ len(carriers_0)
 
 # %%
 csi_filtered = csi.drop(columns=carriers_0)
+csi_uncorr = csi.drop(columns=carriers_0)
+csi_filter_plus = csi.drop(columns=carriers_0)
 csi_pca = csi.drop(columns=carriers_0)
+csi_angle_pca = csi.drop(columns=carriers_0)
 csi_filtered.describe()
+
+# %% [markdown]
+# # Els següents dataset tretes les I's i Q's 0:
+# - csi_filtered: Cap canvi adicional
+# - csi_uncorr: Es converteixen a Modul i Angle + Aplicacio de uncorr_vars()
+# - csi_filter_plus: S'aplica directament min_mutual_info()
+# - csi_pca: Aplicat PCA
+# - csi_angle_pca: Modul i Angle + PCA
 
 # %% [markdown]
 # Ara estudiem les que no ho son.
@@ -159,32 +175,24 @@ csi_filtered.describe()
 # 
 
 # %%
-for k in (1,2):
-    j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)]
-    for j in j_iter:
-        mod:str = f"A{j}_{k}"
-        angl:str = f"O{j}_{k}"
-        i_str = f"I{j}_{k}"
-        q_str = f"Q{j}_{k}"
-        complex = csi_filtered[i_str] + csi_filtered[q_str] * 1j
-        np.angle(complex)
-        
-        csi_filtered[mod] = np.abs(complex)
-        csi_filtered[angl] = np.angle(complex)
-        csi_filtered.drop(columns=[i_str,q_str],inplace=True)
+def complex_conversion(df:pd.DataFrame):
+    """Transforma les dade I i Q a A i O.
 
-# %%
-csi_filtered.describe()
+    Avis: Modifica el dataset donat com a parametre.
 
-# %%
-moduls_1 = ["position"]+ [f"A{j}_1" for j in j_iter]
-moduls_1[:len(moduls_1)//2]
-
-# %%
-sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palette="coolwarm",corner=True)
-
-# %%
-len(moduls_1)
+    Prec: Cal previament eliminar les I's i Q's que siguin 0"""
+    for k in (1,2):
+        j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)]
+        for j in j_iter:
+            mod:str = f"A{j}_{k}"
+            angl:str = f"O{j}_{k}"
+            i_str = f"I{j}_{k}"
+            q_str = f"Q{j}_{k}"
+            complex = df[i_str] + df[q_str] * 1j
+            np.angle(complex)
+            df[mod] = np.abs(complex)
+            df[angl] = np.angle(complex)
+            df.drop(columns=[i_str,q_str],inplace=True)
 
 # %%
 def min_mutual_info(df:pd.DataFrame,min_mut_infor:float=0.1)->list[str]:
@@ -199,12 +207,6 @@ def min_mutual_info(df:pd.DataFrame,min_mut_infor:float=0.1)->list[str]:
         if puntuacions_mi[i] < min_mut_infor:
             cols.append(X.columns[i])
     return cols
-
-# %%
-vars_to_drop = min_mutual_info(csi_filtered)
-
-# %%
-csi_filtered.drop(columns=vars_to_drop, inplace=True)
 
 # %%
 #Algorisme com Sieve d' Eratosthenes pero per descartar les variables
@@ -228,15 +230,54 @@ def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_out:bool
     return [vars[j] for j in range(n_vars) if vars_select[j]]
 
 # %%
-vars_to_drop = uncorr_vars(csi_filtered, csi_filtered.columns) #fem el drop de les variables no correlades
-vars_to_drop.remove("position")
-csi_filtered.drop(columns=vars_to_drop,inplace=True)
+j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)] #per si cal en altres apartats aquest indexs
 
 # %%
-csi_filtered.describe()
+#csi_uncorr
+complex_conversion(csi_uncorr)
+moduls_1 = ["position"]+ [f"A{j}_1" for j in j_iter]
+uncorr_moduls_1 = uncorr_vars(csi_uncorr,moduls_1[1:]) #de 52 variables incialment ens quedem amb 5
+moduls_2 = [f"A{j}_2" for j in j_iter]
+uncorr_moduls_2 = uncorr_vars(csi_uncorr,moduls_2) # de 52 variables incialment ens quedem amb 12
+uncorr_moduls = uncorr_vars(csi_uncorr,uncorr_moduls_1 + uncorr_moduls_2)
+angl_1 = [f"O{j}_1" for j in j_iter]
+angl_2 = [f"O{j}_2" for j in j_iter]
+uncorr_angl_1 = uncorr_vars(csi_uncorr,angl_1) # de 52 vars pasem a 2
+uncorr_angl_2 = uncorr_vars(csi_uncorr,angl_2) # de 52 vars pasem a 1
+uncorr_raw_csi = uncorr_moduls + uncorr_angl_1 + uncorr_angl_2
+vars_to_drop_uncorr = uncorr_vars(csi_uncorr,moduls_1[1:] + moduls_2 + angl_1 + angl_2,drop_out=True) #fem el drop de les variables no correlades
+csi_uncorr.drop(columns=vars_to_drop_uncorr,inplace=True)
+csi_uncorr.describe()
 
-# %% [markdown]
-# Hem aconseguit reduir les 256 variables Raw CSI incialment presents a 38 variables.
+# %%
+#csi_filter_plus
+vars_to_drop_filter_plus = min_mutual_info(csi_filter_plus)
+csi_filter_plus.drop(columns=vars_to_drop_filter_plus, inplace=True)
+csi_filter_plus.describe()
+
+# %%
+#csi_pca
+X_pca = csi_pca.loc[:,csi_pca.columns != 'position']
+y_pca = csi_pca['position']
+pca = PCA(n_components=N_COMP)
+X_pca = pca.fit_transform(X_pca)
+csi_pca = pd.DataFrame(X_pca)
+csi_pca['position'] = y_pca
+csi_pca
+
+# %%
+#csi_angle_pca
+complex_conversion(csi_angle_pca)
+X_angle_pca = csi_angle_pca.loc[:,csi_angle_pca.columns != 'position']
+y_angle_pca = csi_angle_pca['position']
+pca = PCA(n_components=N_COMP)
+X_angle_pca = pca.fit_transform(X_angle_pca)
+csi_angle_pca = pd.DataFrame(X_angle_pca)
+csi_angle_pca['position'] = y_angle_pca
+csi_angle_pca
+
+# %%
+sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palette="coolwarm",corner=True)
 
 # %% [markdown]
 # ### Missing Values
@@ -295,29 +336,43 @@ def scaling_preprocessing(X, scaler=None)->tuple[pd.DataFrame,MinMaxScaler]: #fu
     return X, scaler
 
 # %%
-X = csi_filtered.loc[:,csi_filtered.columns != 'position']
-y = csi_filtered['position']
+def df_train_test_split(df:pd.DataFrame,test_size:float=0.25,seed:int=SEED)->tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
+    """Fa un train  Test Split pel Dataframe df i retorna X_train, X_test, y_train, y_test"""
+    X = df.loc[:,df.columns != 'position']
+    y = df['position']
+    X_train, X_test, y_train, y_test = train_test_split(X,y, test_size=0.25, random_state=seed, stratify=csi_filtered['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
+    return (X_train, X_test, y_train, y_test)
 
 # %%
-X_train, X_test, y_train, y_test = train_test_split(X,y, test_size=0.25, random_state=42, stratify=csi_filtered['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
+#csi_filtered
+X_train_filtered, X_test_filtered, y_train_filtered, y_test_filtered = df_train_test_split(csi_filtered)
+X_train_filtered, scaler_filtered = scaling_preprocessing(X_train_filtered)
+X_test_filtered, _ = scaling_preprocessing(X_test_filtered,scaler_filtered)
 
 # %%
-X_train, scaler = scaling_preprocessing(X_train)
-X_test, _ = scaling_preprocessing(X_test,scaler)
+#csi_uncorr
+X_train_uncorr, X_test_uncorr, y_train_uncorr, y_test_uncorr = df_train_test_split(csi_uncorr)
+X_train_uncorr, scaler_uncorr = scaling_preprocessing(X_train_uncorr)
+X_test_uncorr, _ = scaling_preprocessing(X_test_uncorr,scaler_uncorr)
 
 # %%
-X_train.describe()
+#csi_filter_plus
+X_train_filter_plus, X_test_filter_plus, y_train_filter_plus, y_test_filter_plus = df_train_test_split(csi_filter_plus)
+X_train_filter_plus, scaler_filter_plus = scaling_preprocessing(X_train_filter_plus)
+X_test_filter_plus, _ = scaling_preprocessing(X_test_filter_plus,scaler_filter_plus)
 
 # %%
-X_dirty = csi.loc[:,csi.columns != 'position']
-y_dirty = csi['position']
-X_train_dirty, X_test_dirty, y_train_dirty, y_test_dirty = train_test_split(X_dirty,y_dirty, test_size=0.25, random_state=42, stratify=csi['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
-X_train_dirty, scaler = scaling_preprocessing(X_train_dirty)
-X_test_dirty, _ = scaling_preprocessing(X_test_dirty,scaler)
-pca = PCA(n_components=0.99)
-X_train_pca = pca.fit_transform(X_train_dirty)
-X_test_pca = pca.transform(X_test_dirty)
-print(X_train_pca.shape)
+#csi_pca
+X_train_pca, X_test_pca, y_train_pca, y_test_pca = df_train_test_split(csi_pca)
+X_train_pca.shape
+
+# %%
+#csi_angle_pca
+X_train_angle_pca, X_test_angle_pca, y_train_angle_pca, y_test_angle_pca = df_train_test_split(csi_angle_pca)
+X_train_angle_pca.shape
+
+# %%
+
 
 # %% [markdown]
 # ### Balancejar el dataset
@@ -331,6 +386,61 @@ print(X_train_pca.shape)
 
 # %%
 #funcions per transformar csi_final_test per que sigui com X i y (trasnformacions i reduccions de variables inclosas)
+def final_test_filtered(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filtered,columns_to_drop:list[str]=carriers_0)->pd.DataFrame:
+    """Retorna un Dataframe apte per predir segons les transformacions de filtered.
+    
+    Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
+    df = df_raw.drop(columns="ID")
+    df.drop(columns=columns_to_drop,inplace=True) # fem un drop de les I's i Q's igual a 0
+    X_final_test, _ = scaling_preprocessing(df,scaler)
+    return X_final_test
+
+# %%
+def final_test_uncorr(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_uncorr,columns_to_drop:list[str]=carriers_0 + vars_to_drop_uncorr)->pd.DataFrame:
+    """Retorna un Dataframe apte per predir segons les transformacions de uncorr.
+    
+    Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
+    df = df_raw.drop(columns="ID")
+    df.drop(columns=columns_to_drop[:48],inplace=True) # fem un drop de les I's i Q's igual a 0
+    complex_conversion(df)
+    df.drop(columns=columns_to_drop[48:],inplace=True) #treim les variable no correlades
+    X_final_test, _ = scaling_preprocessing(df,scaler)
+    return X_final_test
+
+# %%
+def final_test_filter_plus(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filter_plus,columns_to_drop:list[str]=carriers_0 + vars_to_drop_filter_plus)->pd.DataFrame:
+    """Retorna un Dataframe apte per predir segons les transformacions de filter_plus.
+    
+    Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
+    df = df_raw.drop(columns="ID")
+    df.drop(columns=columns_to_drop,inplace=True)
+    X_final_test, _ = scaling_preprocessing(df,scaler)
+    return X_final_test
+
+
+# %%
+def final_test_pca(df_raw:pd.DataFrame=csi_final_test,columns_to_drop:list[str]=carriers_0,n_comp:float=N_COMP)->pd.DataFrame:
+    """Retorna un Dataframe apte per predir segons les transformacions de pca.
+    
+    Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
+    df = df_raw.drop(columns="ID")
+    df.drop(columns=columns_to_drop,inplace=True)
+    pca = PCA(n_components=n_comp)
+    X_pca = pca.fit_transform(df)
+    return pd.DataFrame(X_pca)
+
+# %%
+def final_test_angle_pca(df_raw:pd.DataFrame=csi_final_test,columns_to_drop:list[str]=carriers_0,n_comp:float=N_COMP)->pd.DataFrame:
+    """Retorna un Dataframe apte per predir segons les transformacions de angle_pca.
+    
+    Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
+    df = df_raw.drop(columns="ID")
+    df.drop(columns=columns_to_drop,inplace=True)
+    complex_conversion(df)
+    pca = PCA(n_components=n_comp)
+    X_angle_pca = pca.fit_transform(df)
+    return pd.DataFrame(X_angle_pca)
+
 
 # %%
 #funcions per escriure el resultat a un fitxer
@@ -344,7 +454,23 @@ def output_submission(y:np.ndarray,filename:str="out")->None:
     print("Fitxer d'output generat")
 
 # %%
+prueba_arr = carriers_0 + vars_to_drop_uncorr
 
+# %%
+vars_to_drop_uncorr == prueba_arr[48:]
+
+# %%
+
+
+# %% [markdown]
+# # Seleccio de Dades per l'entrenament
+
+# %%
+#Exemple (es pot canviar per X_train_..., etc)
+X_train = X_train_uncorr
+X_test = X_test_uncorr
+y_train = y_train_uncorr
+y_test = y_test_uncorr
 
 # %% [markdown]
 # ## 1.LDA
@@ -354,13 +480,11 @@ def output_submission(y:np.ndarray,filename:str="out")->None:
 lda = LinearDiscriminantAnalysis()
 lda.fit(X_train, y_train)
 
-
 # %%
 #Afegir validacio
 
 # %%
 y_test_lda_pred = lda.predict(X_test)
-
 
 # %%
 #Metriques
@@ -378,12 +502,9 @@ disp_lda.plot(ax=axs)
 axs.set_title('LDA')
 
 # %%
-output_submission(y_test_lda_pred,filename="lda") #exemple de com generar un fitxer de sortida amb el output
-
-# %%
-lda.fit(X_train_pca, y_train)
+lda.fit(X_train_pca, y_train_pca)
 y_test_lda_pred = lda.predict(X_test_pca)
-accuracy_lda = accuracy_score(y_test, y_test_lda_pred)
+accuracy_lda = accuracy_score(y_test_pca, y_test_lda_pred)
 f1_lda = f1_score(y_test, y_test_lda_pred,average='macro')
 print(f"LDA test accuracy: {accuracy_lda} \n LDA test f1-score: {f1_lda}")
 
@@ -403,7 +524,7 @@ y_test_qda_pred = qda.predict(X_test)
 # %%
 accuracy_qda = accuracy_score(y_test, y_test_qda_pred)
 f1_qda = f1_score(y_test, y_test_qda_pred,average='macro')
-print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
+print(f"QDA test accuracy: {accuracy_qda} \n QDA test f1-score: {f1_qda}")
 
 # %%
 cm_qda = confusion_matrix(y_test, y_test_lda_pred)
@@ -417,7 +538,7 @@ axs.set_title('QDA')
 # %%
 qda.fit(X_train_pca, y_train)
 y_test_qda_pred = lda.predict(X_test_pca)
-accuracy_qda = accuracy_score(y_test, y_test_qda_pred)
+accuracy_qda = accuracy_score(y_test_pca, y_test_qda_pred)
 f1_qda = f1_score(y_test, y_test_qda_pred,average='macro')
 print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 
@@ -432,12 +553,30 @@ print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 
 # %%
 nb = GaussianNB()
-nb.fit(X_train_pca, y_train)
-y_pred_nb = nb.predict(X_test_pca)
+nb.fit(X_train, y_train)
+y_pred_nb = nb.predict(X_test)
 accuracy_nb = accuracy_score(y_test, y_pred_nb)
+f1_nb = f1_score(y_test, y_test_qda_pred,average='macro')
 
 # %%
 accuracy_nb
+
+
+
+# %%
+f1_nb
+
+# %%
+cm_naive = confusion_matrix(y_test, y_pred_nb)
+disp_naive = ConfusionMatrixDisplay(cm_naive)
+fig, axs = plt.subplots(figsize=(12, 4))
+
+disp_naive.plot(ax=axs)
+
+axs.set_title('Naive-Bayes')
+
+# %%
+
 
 # %% [markdown]
 # ## 4.Neural Probabilistic Classifier
@@ -461,7 +600,16 @@ accuracy_nb
 # ## 7.SVM
 
 # %%
-svm = SVC(kernel='rbf', C=10.0, gamma='scale', random_state=42)
+
+
+# %%
+X_train = X_train_filtered
+X_test = X_test_filtered
+y_train = y_train_filtered
+y_test = y_test_filtered
+
+# %%
+svm = SVC(kernel='rbf', C=10.0, gamma='scale', random_state=SEED)
 svm.fit(X_train, y_train)
 
 y_pred_svm = svm.predict(X_test)
@@ -472,7 +620,22 @@ f1_svm = f1_score(y_test, y_pred_svm, average="macro")
 accuracy_svm
 
 # %%
+
 f1_svm
+
+# %%
+X_final_test = final_test_filtered()
+X_final_test
+
+# %%
+y_final_pred = svm.predict(X_final_test)
+
+
+# %%
+y_final_pred.shape
+
+# %%
+
 
 # %% [markdown]
 # ## 8.Random forest and Gradient boosting
