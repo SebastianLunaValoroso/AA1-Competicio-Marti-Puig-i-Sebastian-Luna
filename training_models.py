@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sn
 import pandas as pd
 from collections import Counter
-from sklearn.model_selection import train_test_split, cross_validate
+from sklearn.model_selection import train_test_split, cross_validate, GridSearchCV
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearDiscriminantAnalysis
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, ConfusionMatrixDisplay, confusion_matrix
@@ -18,10 +18,12 @@ from sklearn.feature_selection import mutual_info_classif
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
-from sklearn.naive_bayes import GaussianNB
+from sklearn.naive_bayes import GaussianNB, CategoricalNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from typing import Iterator
 import warnings
-warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
+warnings.filterwarnings("ignore")
 # from IPython.core.interactiveshell import InteractiveShell
 # InteractiveShell.ast_node_interactivity = "all"
 
@@ -157,6 +159,7 @@ csi_uncorr = csi.drop(columns=carriers_0)
 csi_filter_plus = csi.drop(columns=carriers_0)
 csi_pca = csi.drop(columns=carriers_0)
 csi_angle_pca = csi.drop(columns=carriers_0)
+csi_filtered_plus_uncorr = csi.drop(columns=carriers_0)
 csi_filtered.describe()
 
 # %% [markdown]
@@ -166,6 +169,7 @@ csi_filtered.describe()
 # - csi_filter_plus: S'aplica directament min_mutual_info()
 # - csi_pca: Aplicat PCA
 # - csi_angle_pca: Modul i Angle + PCA
+# - csi_filtered_plus_uncorr
 
 # %% [markdown]
 # Ara estudiem les que no ho son.
@@ -178,24 +182,54 @@ csi_filtered.describe()
 # 
 
 # %%
-def complex_conversion(df:pd.DataFrame):
+def complex_conversion(df:pd.DataFrame,rangs:tuple[list[int],list[int],list[int],list[int]]|None=None):
     """Transforma les dade I i Q a A i O.
 
     Avis: Modifica el dataset donat com a parametre.
 
     Prec: Cal previament eliminar les I's i Q's que siguin 0"""
+    rows:int = df.shape[0]
     for k in (1,2):
-        j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)]
-        for j in j_iter:
-            mod:str = f"A{j}_{k}"
-            angl:str = f"O{j}_{k}"
-            i_str = f"I{j}_{k}"
-            q_str = f"Q{j}_{k}"
-            complex = df[i_str] + df[q_str] * 1j
-            np.angle(complex)
-            df[mod] = np.abs(complex)
-            df[angl] = np.angle(complex)
-            df.drop(columns=[i_str,q_str],inplace=True)
+        if rangs is None:
+            j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)]
+            for j in j_iter:
+                mod:str = f"A{j}_{k}"
+                angl:str = f"O{j}_{k}"
+                i_str = f"I{j}_{k}"
+                q_str = f"Q{j}_{k}"
+                complex = df[i_str] + df[q_str] * 1j
+                np.angle(complex)
+                df[mod] = np.abs(complex)
+                df[angl] = np.angle(complex)
+                df.drop(columns=[i_str,q_str],inplace=True)
+        else:
+            i_q = list(set(rangs[0 + k -1]).union(set(rangs[1 + k -1])))
+            for j in i_q:
+                mod:str = f"A{j}_{k}"
+                angl:str = f"O{j}_{k}"
+                i_str = f"I{j}_{k}"
+                q_str = f"Q{j}_{k}"
+                try:
+                    i_val = df[i_str]
+                except:
+                    i_val = np.zeros(rows)
+                try:
+                    q_val = df[i_str]
+                except:
+                    q_val = np.zeros(rows)
+                complex = i_val + q_val * 1j
+                np.angle(complex)
+                df[mod] = np.abs(complex)
+                df[angl] = np.angle(complex)
+            if k == 2:
+                i1_drop = [f"I{p}_1" for p in rangs[0]]
+                q1_drop = [f"Q{p}_1" for p in rangs[1]]
+                i2_drop = [f"I{p}_2" for p in rangs[2]]
+                q2_drop = [f"Q{p}_2" for p in rangs[3]]
+                vals_drop = i1_drop +q1_drop + i2_drop + q2_drop
+                df.drop(columns=[vals_drop],inplace=True)
+
+
 
 # %%
 def min_mutual_info(df:pd.DataFrame,min_mut_infor:float=0.1)->list[str]:
@@ -280,6 +314,16 @@ csi_angle_pca['position'] = y_angle_pca
 csi_angle_pca
 
 # %%
+#csi_filtered_plus_uncorr
+vars_to_drop_filtered_plus_uncorr = min_mutual_info(csi_filtered_plus_uncorr)
+csi_filtered_plus_uncorr.drop(columns=vars_to_drop_filtered_plus_uncorr, inplace=True)
+complex_conversion(csi_filtered_plus_uncorr)
+
+
+# %%
+csi_filtered.shape[0]
+
+# %%
 sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palette="coolwarm",corner=True)
 
 # %% [markdown]
@@ -343,7 +387,7 @@ def df_train_test_split(df:pd.DataFrame,test_size:float=0.25,seed:int=SEED)->tup
     """Fa un train  Test Split pel Dataframe df i retorna X_train, X_test, y_train, y_test"""
     X = df.loc[:,df.columns != 'position']
     y = df['position']
-    X_train, X_test, y_train, y_test = train_test_split(X,y, test_size=0.25, random_state=seed, stratify=csi_filtered['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
+    X_train, X_test, y_train, y_test = train_test_split(X,y, test_size=test_size, random_state=seed, stratify=csi_filtered['position']) #stratify fara que es conservin les mateixes proporcions de la feature position
     return (X_train, X_test, y_train, y_test)
 
 # %%
@@ -607,6 +651,26 @@ axs.set_title('QDA')
 # ## 3.Naive-Bayes Classifier
 
 # %%
+gaussian_nb = GaussianNB()
+
+cross_val_results = pd.DataFrame(cross_validate(gaussian_nb , X_train, y_train, cv = 5, scoring = ['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'] ))
+
+results_df.loc['Gaussian Naive Bayes',:] = cross_val_results[['test_accuracy', 'test_f1_macro',
+       'test_precision_macro', 'test_recall_macro']].mean().values
+results_df
+
+# %%
+gaussian_nb.fit(X_train, y_train)
+cm_naive = confusion_matrix(y_train, pd.Series(gaussian_nb.predict(X_train)))
+disp_naive = ConfusionMatrixDisplay(cm_naive)
+fig, axs = plt.subplots(figsize=(12, 4))
+
+disp_naive.plot(ax=axs)
+
+axs.set_title('Naive-Bayes')
+
+# %%
+#TEST (No Final), executar despres de validacio de tots els models
 nb = GaussianNB()
 nb.fit(X_train, y_train)
 y_pred_nb = nb.predict(X_test)
@@ -643,10 +707,87 @@ axs.set_title('Naive-Bayes')
 # ## 5.K-NN
 
 # %%
+#[1, 3, 5, 7, 10, 15, 20]
 
+# %%
+knn = KNeighborsClassifier()
+
+knn_cv = GridSearchCV(
+    estimator=knn,
+    param_grid={
+        'n_neighbors': [1, 3, 5, 7, 10, 15, 20],
+        'metric': ['euclidean', 'minkowski', 'manhattan', 'cosine']
+    },
+    scoring=['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'],
+    refit=False
+)
+
+knn_cv.fit(X_train, y_train)
+results_knn_df = pd.DataFrame(knn_cv.cv_results_)
+cols = ['param_n_neighbors', 'param_metric',
+     'mean_test_accuracy',
+    'mean_test_f1_macro', 'mean_test_precision_macro',
+    'mean_test_recall_macro', 
+    'std_test_accuracy', 'std_test_f1_macro', 'std_test_precision_macro',
+    'std_test_recall_macro'
+]
+results_knn_df = results_knn_df[cols].sort_values(by='mean_test_accuracy',ascending=False).reset_index(drop=True)
+results_knn_df
+
+# %%
+best_n_neighbors = results_knn_df["param_n_neighbors"][0]
+best_metric = results_knn_df["param_metric"][0]
+print(f'The best set of parameters is k={best_n_neighbors} and distance={best_metric}.')
+
+# %%
+knn_model = KNeighborsClassifier(n_neighbors=best_n_neighbors, metric=best_metric)
+knn_model.fit(X_train, y_train)
+
+cm_knn = confusion_matrix(y_train, pd.Series(knn_model.predict(X_train)))
+disp_knn = ConfusionMatrixDisplay(cm_naive)
+fig, axs = plt.subplots(figsize=(12, 4))
+
+disp_knn.plot(ax=axs)
+
+axs.set_title('K-NN')
+
+# %%
+results_df.loc['KNN',:] = results_knn_df.loc[0, ['mean_test_accuracy', 'mean_test_f1_macro',
+       'mean_test_precision_macro', 'mean_test_recall_macro']].values
+results_df
+
+# %%
+#TEST (No Final), executar despres de validacio de tots els models
 
 # %% [markdown]
 # ## 6.Logistic Regression
+
+# %%
+#es pot escollir:
+# solvers: ['lbfgs','liblinear','newton-cg','newton-cholesky','sag','saga']
+#tol (precisio de quan es considera 0)
+#penalty: ['l1', 'l2', 'elasticnet']
+#Cs pot ser una llista de floats o un enter (pel cas de l'enter es una serie de nombres entre 1e-4 i 1e4)
+
+# %%
+logreg = LogisticRegressionCV(Cs=20, random_state=SEED, cv=5, scoring = 'accuracy', l1_ratios=0,solver = 'lbfgs')
+
+logreg.fit(X_train, y_train)
+
+# %%
+avg_crossval_scores = logreg.scores_['normal'].mean(axis=0)
+idx = np.argmax(avg_crossval_scores)
+best_C = logreg.Cs_[idx]
+print(f'The best value for C is {best_C}.')
+
+# %%
+
+
+# %%
+
+
+# %%
+
 
 # %%
 
@@ -655,7 +796,7 @@ axs.set_title('Naive-Bayes')
 # ## 7.SVM
 
 # %%
-
+#Si C es massa gran pot-hi haver overfitting
 
 # %%
 svm = SVC(kernel='rbf', C=10.0, gamma='scale', random_state=SEED)
