@@ -13,12 +13,15 @@ from collections import Counter
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearDiscriminantAnalysis
-from sklearn.metrics import accuracy_score, f1_score, ConfusionMatrixDisplay, confusion_matrix
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, ConfusionMatrixDisplay, confusion_matrix
 from sklearn.feature_selection import mutual_info_classif
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
+from typing import Iterator
+import warnings
+warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 # from IPython.core.interactiveshell import InteractiveShell
 # InteractiveShell.ast_node_interactivity = "all"
 
@@ -454,23 +457,34 @@ def output_submission(y:np.ndarray,filename:str="out")->None:
     print("Fitxer d'output generat")
 
 # %%
-prueba_arr = carriers_0 + vars_to_drop_uncorr
-
-# %%
-vars_to_drop_uncorr == prueba_arr[48:]
-
-# %%
 
 
 # %% [markdown]
 # # Seleccio de Dades per l'entrenament
 
 # %%
-#Exemple (es pot canviar per X_train_..., etc)
-X_train = X_train_uncorr
-X_test = X_test_uncorr
-y_train = y_train_uncorr
-y_test = y_test_uncorr
+def dataset_iterator(x_train:list[pd.DataFrame]=[X_train_filtered, X_train_uncorr, X_train_filter_plus, X_train_pca, X_train_angle_pca],
+                    x_test:list[pd.DataFrame]=[X_test_filtered, X_test_uncorr, X_test_filter_plus, X_test_pca, X_test_angle_pca],
+                    y_train:list[np.ndarray]=[y_train_filtered,y_train_uncorr,y_train_filter_plus, y_train_pca, y_train_angle_pca],
+                    y_test:list[np.ndarray]=[y_test_filtered,y_test_uncorr,y_test_filter_plus,y_test_pca,y_test_angle_pca],
+                    x_final_test:list[pd.DataFrame] =[final_test_filtered(),final_test_uncorr(),final_test_filter_plus(),final_test_pca(),final_test_angle_pca()],
+                    noms:list[str] = ["csi_filtered","csi_uncorr","csi_filter_plus","csi_pca","csi_angle_pca"])->Iterator[tuple[pd.DataFrame,pd.DataFrame,np.ndarray,np.ndarray,pd.DataFrame,str]]:
+    """Iterador per obtenir X_train,X_test,y_train,y_test sobre els diferents datasets"""
+    num_iters:int = len(x_train)
+    for i in range(num_iters):
+        yield (x_train[i], x_test[i], y_train[i], y_test[i],x_final_test[i],noms[i])
+
+
+# %%
+select_dataset = dataset_iterator() #crea el iterador de datasets
+
+# %%
+#Cada cop que s'executa aquest bloc s'escull el seguent dataset de la llista, si retorna error es qu'acabat i heu de tornar a excutar el codi d'a dalt
+X_train, X_test, y_train, y_test, X_final_test,nom_dataset_selected = next(select_dataset)
+print(f"Seleccionat dataset {nom_dataset_selected}")
+
+# %%
+results_df = pd.DataFrame(index=[], columns= ['Accuracy', 'F1 Macro', 'Precision Macro', 'Recall Macro'])
 
 # %% [markdown]
 # ## 1.LDA
@@ -502,11 +516,15 @@ disp_lda.plot(ax=axs)
 axs.set_title('LDA')
 
 # %%
-lda.fit(X_train_pca, y_train_pca)
-y_test_lda_pred = lda.predict(X_test_pca)
-accuracy_lda = accuracy_score(y_test_pca, y_test_lda_pred)
-f1_lda = f1_score(y_test, y_test_lda_pred,average='macro')
-print(f"LDA test accuracy: {accuracy_lda} \n LDA test f1-score: {f1_lda}")
+#LDA Separacio aplicada graficament
+X_transformed = lda.transform(X_train)
+
+X_transformed = pd.DataFrame(X_transformed)
+X_transformed['labels'] = y_train.reset_index(drop=True)
+X_transformed
+
+# %%
+sn.scatterplot(x= 0, y= 1, data = X_transformed, hue='labels',palette="coolwarm")
 
 # %%
 
@@ -527,20 +545,13 @@ f1_qda = f1_score(y_test, y_test_qda_pred,average='macro')
 print(f"QDA test accuracy: {accuracy_qda} \n QDA test f1-score: {f1_qda}")
 
 # %%
-cm_qda = confusion_matrix(y_test, y_test_lda_pred)
+cm_qda = confusion_matrix(y_test, y_test_qda_pred)
 disp_qda = ConfusionMatrixDisplay(cm_qda)
 fig, axs = plt.subplots(figsize=(12, 4))
 
 disp_qda.plot(ax=axs)
 
 axs.set_title('QDA')
-
-# %%
-qda.fit(X_train_pca, y_train)
-y_test_qda_pred = lda.predict(X_test_pca)
-accuracy_qda = accuracy_score(y_test_pca, y_test_qda_pred)
-f1_qda = f1_score(y_test, y_test_qda_pred,average='macro')
-print(f"LDA test accuracy: {accuracy_qda} \n LDA test f1-score: {f1_qda}")
 
 # %%
 
@@ -556,7 +567,7 @@ nb = GaussianNB()
 nb.fit(X_train, y_train)
 y_pred_nb = nb.predict(X_test)
 accuracy_nb = accuracy_score(y_test, y_pred_nb)
-f1_nb = f1_score(y_test, y_test_qda_pred,average='macro')
+f1_nb = f1_score(y_test, y_pred_nb,average='macro')
 
 # %%
 accuracy_nb
@@ -603,12 +614,6 @@ axs.set_title('Naive-Bayes')
 
 
 # %%
-X_train = X_train_filtered
-X_test = X_test_filtered
-y_train = y_train_filtered
-y_test = y_test_filtered
-
-# %%
 svm = SVC(kernel='rbf', C=10.0, gamma='scale', random_state=SEED)
 svm.fit(X_train, y_train)
 
@@ -624,24 +629,19 @@ accuracy_svm
 f1_svm
 
 # %%
-X_final_test = final_test_filtered()
-X_final_test
+cm_svm = confusion_matrix(y_test, y_pred_svm)
+disp_svm = ConfusionMatrixDisplay(cm_svm)
+fig, axs = plt.subplots(figsize=(12, 4))
 
-# %%
-y_final_pred = svm.predict(X_final_test)
+disp_svm.plot(ax=axs)
 
-
-# %%
-y_final_pred.shape
-
-# %%
-
+axs.set_title('SVM')
 
 # %% [markdown]
 # ## 8.Random forest and Gradient boosting
 
 # %%
-rf_model = RandomForestClassifier(n_estimators=200, max_depth=30, random_state=42, n_jobs=-1)
+rf_model = RandomForestClassifier(n_estimators=200, max_depth=30, random_state=SEED, n_jobs=-1)
 rf_model.fit(X_train, y_train)
 
 y_pred_rf = rf_model.predict(X_test)
@@ -657,21 +657,7 @@ acc_rf
 f1_rf
 
 # %%
-rf_model_pca = RandomForestClassifier(n_estimators=200, max_depth=30, random_state=42, n_jobs=-1)
-rf_model_pca.fit(X_train_pca, y_train)
-
-y_pred_rf_pca = rf_model_pca.predict(X_test_pca)
-acc_rf_pca = accuracy_score(y_test, y_pred_rf_pca)
-f1_rf_pca = f1_score(y_test, y_pred_rf_pca, average='macro')
-
-# %%
-acc_rf_pca
-
-# %%
-f1_rf_pca
-
-# %%
-gb_model = GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=3, random_state=42)
+gb_model = GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=3, random_state=SEED)
 gb_model.fit(X_train, y_train)
 
 y_pred_gb = gb_model.predict(X_test)
@@ -684,25 +670,23 @@ acc_gb
 # %%
 f1_gb
 
-# %%
-gb_model_pca = GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=3, random_state=42)
-gb_model_pca.fit(X_train_pca, y_train)
-
-y_pred_gb_pca = gb_model_pca.predict(X_test_pca)
-acc_gb_pca = accuracy_score(y_test, y_pred_gb_pca)
-f1_gb_pca = f1_score(y_test, y_pred_gb_pca, average='macro')
+# %% [markdown]
+# ## 9.Mirar més métodes a la resta de transpas
 
 # %%
-acc_gb_pca
 
-# %%
-f1_gb_pca
 
 # %% [markdown]
-# ## 8.Mirar més métodes a la resta de transpas
+# ## 10. Execució sobre Final Test i Exportar resultats
 
 # %%
+model = svm #exemple
+y_final_pred = model.predict(X_final_test)
+y_final_pred
 
+
+# %%
+output_submission(y_final_pred)
 
 # %% [markdown]
 # # Temporal Cache de Dades (eliminar al final)
