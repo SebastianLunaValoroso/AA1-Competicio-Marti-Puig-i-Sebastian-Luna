@@ -159,7 +159,7 @@ csi_uncorr = csi.drop(columns=carriers_0)
 csi_filter_plus = csi.drop(columns=carriers_0)
 csi_pca = csi.drop(columns=carriers_0)
 csi_angle_pca = csi.drop(columns=carriers_0)
-csi_filtered_plus_uncorr = csi.drop(columns=carriers_0)
+csi_filter_plus_uncorr = csi.drop(columns=carriers_0)
 csi_filtered.describe()
 
 # %% [markdown]
@@ -203,7 +203,7 @@ def complex_conversion(df:pd.DataFrame,rangs:tuple[list[int],list[int],list[int]
                 df[angl] = np.angle(complex)
                 df.drop(columns=[i_str,q_str],inplace=True)
         else:
-            i_q = list(set(rangs[0 + k -1]).union(set(rangs[1 + k -1])))
+            i_q = list(set(rangs[0 + (k -1)*2]).union(set(rangs[1 + (k -1)*2])))
             for j in i_q:
                 mod:str = f"A{j}_{k}"
                 angl:str = f"O{j}_{k}"
@@ -211,25 +211,18 @@ def complex_conversion(df:pd.DataFrame,rangs:tuple[list[int],list[int],list[int]
                 q_str = f"Q{j}_{k}"
                 try:
                     i_val = df[i_str]
+                    df.drop(columns=[i_str],inplace=True)
                 except:
                     i_val = np.zeros(rows)
                 try:
-                    q_val = df[i_str]
+                    q_val = df[q_str]
+                    df.drop(columns=[q_str],inplace=True)
                 except:
                     q_val = np.zeros(rows)
                 complex = i_val + q_val * 1j
                 np.angle(complex)
                 df[mod] = np.abs(complex)
                 df[angl] = np.angle(complex)
-            if k == 2:
-                i1_drop = [f"I{p}_1" for p in rangs[0]]
-                q1_drop = [f"Q{p}_1" for p in rangs[1]]
-                i2_drop = [f"I{p}_2" for p in rangs[2]]
-                q2_drop = [f"Q{p}_2" for p in rangs[3]]
-                vals_drop = i1_drop +q1_drop + i2_drop + q2_drop
-                df.drop(columns=[vals_drop],inplace=True)
-
-
 
 # %%
 def min_mutual_info(df:pd.DataFrame,min_mut_infor:float=0.1)->list[str]:
@@ -315,13 +308,23 @@ csi_angle_pca
 
 # %%
 #csi_filtered_plus_uncorr
-vars_to_drop_filtered_plus_uncorr = min_mutual_info(csi_filtered_plus_uncorr)
-csi_filtered_plus_uncorr.drop(columns=vars_to_drop_filtered_plus_uncorr, inplace=True)
-complex_conversion(csi_filtered_plus_uncorr)
+vars_to_drop_filtered_plus_uncorr_1 = min_mutual_info(csi_filter_plus_uncorr)
+csi_filter_plus_uncorr.drop(columns=vars_to_drop_filtered_plus_uncorr_1, inplace=True)
+rangos = ([i for i in range(7,14)] + [15] + [i for i in range(23,27)] + [i for i in range(38,53)] + [54,55],
+ [i for i in range(8,14)] + [15] + [i for i in range(22,27)] + [i for i in range(38,52)],
+ [i for i in range(22,27)] + [i for i in range(38,42)],
+ [i for i in range(22,27)] + [i for i in range(38,42)] + [53])
+complex_conversion(csi_filter_plus_uncorr,rangos)
 
-
-# %%
-csi_filtered.shape[0]
+ao_1_iter = list(set(rangos[0]).union(set(rangos[1])))
+a_1 = [f"A{j}_1" for j in ao_1_iter]
+o_1 = [f"O{j}_1" for j in ao_1_iter]
+ao_2_iter = list(set(rangos[2]).union(set(rangos[3])))
+a_2 = [f"A{j}_2" for j in ao_2_iter]
+o_2 = [f"O{j}_2" for j in ao_2_iter]
+vars_to_drop_filtered_plus_uncorr_2 = uncorr_vars(csi_filter_plus_uncorr,vars=a_1 + o_1 + a_2 + o_2,drop_out=True)
+csi_filter_plus_uncorr.drop(columns=vars_to_drop_filtered_plus_uncorr_2,inplace=True)
+csi_filter_plus_uncorr.describe()
 
 # %%
 sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palette="coolwarm",corner=True)
@@ -419,6 +422,10 @@ X_train_angle_pca, X_test_angle_pca, y_train_angle_pca, y_test_angle_pca = df_tr
 X_train_angle_pca.shape
 
 # %%
+#csi_filter_plus_uncorr
+X_train_filter_plus_uncorr, X_test_filter_plus_uncorr, y_train_filter_plus_uncorr, y_test_filter_plus_uncorr = df_train_test_split(csi_filter_plus_uncorr)
+X_train_filter_plus_uncorr, scaler_filter_plus_uncorr = scaling_preprocessing(X_train_filter_plus_uncorr)
+X_test_filter_plus_uncorr, _ = scaling_preprocessing(X_test_filter_plus_uncorr,scaler_filter_plus_uncorr)
 
 
 # %% [markdown]
@@ -490,6 +497,23 @@ def final_test_angle_pca(df_raw:pd.DataFrame=csi_final_test,columns_to_drop:list
 
 
 # %%
+len(carriers_0) + len(vars_to_drop_filtered_plus_uncorr_1)
+
+# %%
+def final_test_filter_plus_uncorr(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filter_plus_uncorr,
+                                  columns_to_drop:list[str]=carriers_0 + vars_to_drop_filtered_plus_uncorr_1 + vars_to_drop_filtered_plus_uncorr_2,
+                                  rangs:tuple[list[int],list[int],list[int],list[int]]=rangos)->pd.DataFrame:
+    """Retorna un Dataframe apte per predir segons les transformacions de filter_plus_uncorr.
+    
+    Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
+    df = df_raw.drop(columns="ID")
+    df.drop(columns=columns_to_drop[:183],inplace=True) # fem un drop de les I's i Q's igual a 0 i variables de min_info_mutua
+    complex_conversion(df,rangs)
+    df.drop(columns=columns_to_drop[183:],inplace=True) #treim les variable no correlades
+    X_final_test, _ = scaling_preprocessing(df,scaler)
+    return X_final_test
+
+# %%
 #funcions per escriure el resultat a un fitxer
 def output_submission(y:np.ndarray,filename:str="out")->None:
     """Escribe y en el fichero filename.csv para la submission. No hay que incluir '.csv' en filename"""
@@ -507,12 +531,12 @@ def output_submission(y:np.ndarray,filename:str="out")->None:
 # # Seleccio de Dades per l'entrenament
 
 # %%
-def dataset_iterator(x_train:list[pd.DataFrame]=[X_train_filtered, X_train_uncorr, X_train_filter_plus, X_train_pca, X_train_angle_pca],
-                    x_test:list[pd.DataFrame]=[X_test_filtered, X_test_uncorr, X_test_filter_plus, X_test_pca, X_test_angle_pca],
-                    y_train:list[np.ndarray]=[y_train_filtered,y_train_uncorr,y_train_filter_plus, y_train_pca, y_train_angle_pca],
-                    y_test:list[np.ndarray]=[y_test_filtered,y_test_uncorr,y_test_filter_plus,y_test_pca,y_test_angle_pca],
-                    x_final_test:list[pd.DataFrame] =[final_test_filtered(),final_test_uncorr(),final_test_filter_plus(),final_test_pca(),final_test_angle_pca()],
-                    noms:list[str] = ["csi_filtered","csi_uncorr","csi_filter_plus","csi_pca","csi_angle_pca"])->Iterator[tuple[pd.DataFrame,pd.DataFrame,np.ndarray,np.ndarray,pd.DataFrame,str]]:
+def dataset_iterator(x_train:list[pd.DataFrame]=[X_train_filtered, X_train_uncorr, X_train_filter_plus, X_train_pca, X_train_angle_pca,X_train_filter_plus_uncorr],
+                    x_test:list[pd.DataFrame]=[X_test_filtered, X_test_uncorr, X_test_filter_plus, X_test_pca, X_test_angle_pca,X_test_filter_plus_uncorr],
+                    y_train:list[np.ndarray]=[y_train_filtered,y_train_uncorr,y_train_filter_plus, y_train_pca, y_train_angle_pca,y_train_filter_plus_uncorr],
+                    y_test:list[np.ndarray]=[y_test_filtered,y_test_uncorr,y_test_filter_plus,y_test_pca,y_test_angle_pca,y_test_filter_plus_uncorr],
+                    x_final_test:list[pd.DataFrame] =[final_test_filtered(),final_test_uncorr(),final_test_filter_plus(),final_test_pca(),final_test_angle_pca(),final_test_filter_plus_uncorr()],
+                    noms:list[str] = ["csi_filtered","csi_uncorr","csi_filter_plus","csi_pca","csi_angle_pca","csi_filter_plus_uncorr"])->Iterator[tuple[pd.DataFrame,pd.DataFrame,np.ndarray,np.ndarray,pd.DataFrame,str]]:
     """Iterador per obtenir X_train,X_test,y_train,y_test sobre els diferents datasets"""
     num_iters:int = len(x_train)
     for i in range(num_iters):
@@ -789,9 +813,6 @@ print(f'The best value for C is {best_C}.')
 # %%
 
 
-# %%
-
-
 # %% [markdown]
 # ## 7.SVM
 
@@ -799,7 +820,7 @@ print(f'The best value for C is {best_C}.')
 #Si C es massa gran pot-hi haver overfitting
 
 # %%
-svm = SVC(kernel='rbf', C=10.0, gamma='scale', random_state=SEED)
+svm = SVC(kernel='rbf', C=100.0, gamma=0.1, random_state=SEED) #C=10.0, gamma ='scale'
 svm.fit(X_train, y_train)
 
 y_pred_svm = svm.predict(X_test)
@@ -821,6 +842,29 @@ fig, axs = plt.subplots(figsize=(12, 4))
 disp_svm.plot(ax=axs)
 
 axs.set_title('SVM')
+
+# %%
+svm = SVC()
+svm.fit(X_train,y_train)
+
+scores = cross_validate(svm, X_train, y_train, cv=5, scoring=['accuracy', 'recall_macro', 'precision_macro', 'f1_macro'])
+results_df.loc['SVM-default',:] = [scores['test_accuracy'].mean(), scores['test_recall_macro'].mean(),
+    scores['test_precision_macro'].mean(), scores['test_f1_macro'].mean()]
+results_df
+
+# %%
+svm = SVC(class_weight='balanced')
+svm.fit(X_train,y_train)
+
+scores = cross_validate(svm, X_train, y_train, cv=5, scoring=['accuracy', 'recall_macro', 'precision_macro', 'f1_macro'])
+results_df_2.loc['SVM-balanced',:] = [scores['test_accuracy'].mean(), scores['test_recall_macro'].mean(),
+    scores['test_precision_macro'].mean(), scores['test_f1_macro'].mean()]
+results_df_2 = results_df.sort_values(by="F1-score (mean)", ascending=False)
+results_df_2
+
+
+# %%
+
 
 # %% [markdown]
 # ## 8.Random forest and Gradient boosting
@@ -857,6 +901,12 @@ f1_gb
 
 # %% [markdown]
 # ## 9.Mirar més métodes a la resta de transpas
+
+# %%
+results_df #filtered
+
+# %%
+results_df
 
 # %%
 
