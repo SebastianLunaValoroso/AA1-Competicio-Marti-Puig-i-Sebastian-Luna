@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sn
 import pandas as pd
 from collections import Counter
-from sklearn.model_selection import train_test_split, cross_validate, GridSearchCV
+from sklearn.model_selection import train_test_split, cross_validate, GridSearchCV, KFold
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearDiscriminantAnalysis
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, ConfusionMatrixDisplay, confusion_matrix
@@ -22,6 +22,7 @@ from sklearn.naive_bayes import GaussianNB, CategoricalNB
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from typing import Iterator
+import re #per detectar regular expressions
 import warnings
 warnings.filterwarnings("ignore")
 # from IPython.core.interactiveshell import InteractiveShell
@@ -33,7 +34,8 @@ pd.set_option('display.precision', 3)
 # %%
 #Constants
 SEED:int = 383006
-N_COMP:float = 0.99
+N_COMP:float = 0.99 #pel PCA
+SEQ_CTRL_SCALED:bool = True #Per escalar seq_ctrl com a cosinus
 
 # %% [markdown]
 # ## Anàlisi Exploratori de les Dades (AED)
@@ -82,7 +84,7 @@ csi['position'].value_counts() #el nombre de mostres a cada posicio es similar
 sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position"]], hue='position',palette="coolwarm") #no seleccionem ara les RAW CSI variables
 
 # %% [markdown]
-# podriem treure rssi1 o rssi2 ja que correlan linealment?
+# Veiem que potser podriem treure rssi1 o rssi2 ja que correlan linealment, ho decidirem al apartat de Dataset Cleaning
 
 # %% [markdown]
 # ## Dataset Cleaning
@@ -101,9 +103,6 @@ sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position"]], hue='positi
 fig, axes = plt.subplots(1,2, gridspec_kw={'width_ratios':[1,4]}, figsize=(9,5))
 csi.boxplot(column = "rssi1", ax=axes[0])
 csi.hist(column = "rssi1", ax = axes[1])
-
-# %%
-csi[csi.rssi1 < -95] #eliminar observacio? cal tenir en compte que esta bastant a prop del -95
 
 # %%
 #Histograma i Boxplot de rssi2
@@ -135,6 +134,7 @@ csi.aoa.min()
 # ### Eliminar Outliers i Variables de RAW CSI
 
 # %%
+# Fem una cerca per veure si n'hi han variables que son sempre 0 i les emmagatzemem a carriers_0
 carriers_0:list[str] = []
 for i in (1,2):
     for j in range(64):
@@ -172,57 +172,104 @@ csi_filtered.describe()
 # - csi_filtered_plus_uncorr
 
 # %% [markdown]
-# Ara estudiem les que no ho son.
-# 
 # Segons la informació que hem trobat sobre aquestes dades d'[OFDM]("https://www.cwnp.com/understanding-ofdm-part-2-2/"):
 # 
 # Es tracta de nombres complexos de la forma $H= I + iQ$, on $i^2=-1$.
 # 
-# Anem sustituir les variables I, Q per A (módul) i Theta (angle):
+# Així que podriem sustituir les variables I, Q per A (módul) i Theta (angle).
 # 
+# Anem a crear una serie de funcions per processars els datasets, com per eliminar variables que donen poca informació sobre la resposta, que estiguin correlades entre ellas o per transfromar les dades:
 
 # %%
-def complex_conversion(df:pd.DataFrame,rangs:tuple[list[int],list[int],list[int],list[int]]|None=None):
-    """Transforma les dade I i Q a A i O.
+def has_attribute(df:pd.DataFrame,attr:str)->bool:
+    """Devuelve True si df[attr] existe"""
+    try:
+        result = df[attr]
+        return True
+    except:
+        return False
+
+
+
+def i_q_indexs(i_q_list:list[str])->list[tuple[int,int]]:
+    """Retorna una llista de tuples (j,k), on Ij_k o Qj_k"""
+    parelles:list[tuple[int,int]] = [] #lo la incialitzem de la mateixa mida que i_q_list per si hi han attributs que no son I o Q a la llista
+    for elem in i_q_list:
+        match = re.findall(r"[IQ](\d+)_(\d+)", elem)
+        try:
+            parelles.append((int(match[0][0]),int(match[0][1])))
+        except:
+            continue
+    return parelles
+
+
+
+
+def find_i_q(df:pd.DataFrame)->list[str]:
+    """Retorna una llista amb el nom de les columnes de la forma Ix_y o Qx_y"""
+    cols:list[str] = [column for column in df.columns]
+    i_qs:list[str] = []
+    for i in range(len(cols)):
+        columna = cols[i]
+        match=re.search(r"[IQ](\d+)_(\d+)", columna)
+        if match is not None:
+            i_qs.append(columna)
+    return i_qs
+
+
+
+def find_raw_csi_format(df:pd.DataFrame,lletra:str,num:int=-1)->list[str]:
+    """Retorna una llista amb el nom de les columnes de la forma lletrax_y o lletrax_num (si es dona num >= 0)"""
+    cols:list[str] = [column for column in df.columns]
+    troballes:list[str] = []
+    for i in range(len(cols)):
+        columna = cols[i]
+        if num > 0:
+            match=re.search(rf"{lletra}(\d+)_{num}", columna)
+        else:
+            match=re.search(rf"{lletra}(\d+)_(\d+)", columna)
+        if match is not None:
+            troballes.append(columna)
+    return troballes
+
+
+
+
+def complex_conversion(df:pd.DataFrame)->None:
+    """
+    Transforma les dades I i Q a A (modul) i O (angle).
 
     Avis: Modifica el dataset donat com a parametre.
 
-    Prec: Cal previament eliminar les I's i Q's que siguin 0"""
+    Prec: Cal previament eliminar les I's i Q's que siguin 0
+    """
     rows:int = df.shape[0]
-    for k in (1,2):
-        if rangs is None:
-            j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)]
-            for j in j_iter:
-                mod:str = f"A{j}_{k}"
-                angl:str = f"O{j}_{k}"
-                i_str = f"I{j}_{k}"
-                q_str = f"Q{j}_{k}"
-                complex = df[i_str] + df[q_str] * 1j
-                np.angle(complex)
-                df[mod] = np.abs(complex)
-                df[angl] = np.angle(complex)
-                df.drop(columns=[i_str,q_str],inplace=True)
-        else:
-            i_q = list(set(rangs[0 + (k -1)*2]).union(set(rangs[1 + (k -1)*2])))
-            for j in i_q:
-                mod:str = f"A{j}_{k}"
-                angl:str = f"O{j}_{k}"
-                i_str = f"I{j}_{k}"
-                q_str = f"Q{j}_{k}"
-                try:
-                    i_val = df[i_str]
-                    df.drop(columns=[i_str],inplace=True)
-                except:
-                    i_val = np.zeros(rows)
-                try:
-                    q_val = df[q_str]
-                    df.drop(columns=[q_str],inplace=True)
-                except:
-                    q_val = np.zeros(rows)
-                complex = i_val + q_val * 1j
-                np.angle(complex)
-                df[mod] = np.abs(complex)
-                df[angl] = np.angle(complex)
+    i_q_iter:list[tuple[int,int]] = i_q_indexs(find_i_q(df))
+    for tup in i_q_iter:
+        j:int = tup[0]
+        k:int = tup[1]
+        mod:str = f"A{j}_{k}"
+        angl:str = f"O{j}_{k}"
+        i_str = f"I{j}_{k}"
+        q_str = f"Q{j}_{k}"
+        if has_attribute(df,mod): #pel cas on hi hagi un i_q_iter que es repeteix
+            continue
+        #S'asegura de donar un valor a I i Q en cas de que un dels 2 no existeixi
+        try:
+            i_val = df[i_str]
+            df.drop(columns=[i_str],inplace=True)
+        except:
+            i_val = np.zeros(rows)
+        try:
+            q_val = df[q_str]
+            df.drop(columns=[q_str],inplace=True)
+        except:
+            q_val = np.zeros(rows)
+        complex = i_val + q_val * 1j
+        np.angle(complex)
+        df[mod] = np.abs(complex)
+        df[angl] = np.angle(complex)
+
 
 # %%
 def min_mutual_info(df:pd.DataFrame,min_mut_infor:float=0.1)->list[str]:
@@ -239,7 +286,7 @@ def min_mutual_info(df:pd.DataFrame,min_mut_infor:float=0.1)->list[str]:
     return cols
 
 # %%
-#Algorisme com Sieve d' Eratosthenes pero per descartar les variables
+#Algorisme que funciona com Sieve d' Eratosthenes pero per descartar les variables
 def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_out:bool=False)->list[str]: #O(n_vars**2 * rows(df))
     """Devuelve las variables que poseen una abs(correlacion) < min_corr.
     
@@ -260,18 +307,15 @@ def uncorr_vars(df:pd.DataFrame,vars:list[str],min_corr:float=0.6, drop_out:bool
     return [vars[j] for j in range(n_vars) if vars_select[j]]
 
 # %%
-j_iter:list[int] = [i for i in range(1,27)] + [i for i in range(38,64)] #per si cal en altres apartats aquest indexs
-
-# %%
 #csi_uncorr
 complex_conversion(csi_uncorr)
-moduls_1 = ["position"]+ [f"A{j}_1" for j in j_iter]
+moduls_1 = find_raw_csi_format(csi_uncorr,"A",1)
 uncorr_moduls_1 = uncorr_vars(csi_uncorr,moduls_1[1:]) #de 52 variables incialment ens quedem amb 5
-moduls_2 = [f"A{j}_2" for j in j_iter]
+moduls_2 = find_raw_csi_format(csi_uncorr,"A",2)
 uncorr_moduls_2 = uncorr_vars(csi_uncorr,moduls_2) # de 52 variables incialment ens quedem amb 12
 uncorr_moduls = uncorr_vars(csi_uncorr,uncorr_moduls_1 + uncorr_moduls_2)
-angl_1 = [f"O{j}_1" for j in j_iter]
-angl_2 = [f"O{j}_2" for j in j_iter]
+angl_1 = find_raw_csi_format(csi_uncorr,"O",1)
+angl_2 = find_raw_csi_format(csi_uncorr,"O",2)
 uncorr_angl_1 = uncorr_vars(csi_uncorr,angl_1) # de 52 vars pasem a 2
 uncorr_angl_2 = uncorr_vars(csi_uncorr,angl_2) # de 52 vars pasem a 1
 uncorr_raw_csi = uncorr_moduls + uncorr_angl_1 + uncorr_angl_2
@@ -310,24 +354,15 @@ csi_angle_pca
 #csi_filtered_plus_uncorr
 vars_to_drop_filtered_plus_uncorr_1 = min_mutual_info(csi_filter_plus_uncorr)
 csi_filter_plus_uncorr.drop(columns=vars_to_drop_filtered_plus_uncorr_1, inplace=True)
-rangos = ([i for i in range(7,14)] + [15] + [i for i in range(23,27)] + [i for i in range(38,53)] + [54,55],
- [i for i in range(8,14)] + [15] + [i for i in range(22,27)] + [i for i in range(38,52)],
- [i for i in range(22,27)] + [i for i in range(38,42)],
- [i for i in range(22,27)] + [i for i in range(38,42)] + [53])
-complex_conversion(csi_filter_plus_uncorr,rangos)
+complex_conversion(csi_filter_plus_uncorr)
 
-ao_1_iter = list(set(rangos[0]).union(set(rangos[1])))
-a_1 = [f"A{j}_1" for j in ao_1_iter]
-o_1 = [f"O{j}_1" for j in ao_1_iter]
-ao_2_iter = list(set(rangos[2]).union(set(rangos[3])))
-a_2 = [f"A{j}_2" for j in ao_2_iter]
-o_2 = [f"O{j}_2" for j in ao_2_iter]
+a_1 = find_raw_csi_format(csi_filter_plus_uncorr,"A",1)
+o_1 = find_raw_csi_format(csi_filter_plus_uncorr,"O",1)
+a_2 = find_raw_csi_format(csi_filter_plus_uncorr,"A",2)
+o_2 = find_raw_csi_format(csi_filter_plus_uncorr,"O",2)
 vars_to_drop_filtered_plus_uncorr_2 = uncorr_vars(csi_filter_plus_uncorr,vars=a_1 + o_1 + a_2 + o_2,drop_out=True)
 csi_filter_plus_uncorr.drop(columns=vars_to_drop_filtered_plus_uncorr_2,inplace=True)
 csi_filter_plus_uncorr.describe()
-
-# %%
-sn.pairplot(data=csi_filtered[moduls_1[:len(moduls_1)//2]], hue='position',palette="coolwarm",corner=True)
 
 # %% [markdown]
 # ### Missing Values
@@ -361,15 +396,23 @@ csi_filtered.isna().sum()
 #csi_filtered = csi_filtered.drop(columns="seq_ctrl")
 
 # %%
-def scaling_preprocessing(X, scaler=None)->tuple[pd.DataFrame,MinMaxScaler]: #funcio extraida de la practica 4 Linear Regression
+def scaling_preprocessing(X, scaler=None,scale_seq_ctrl:bool=False)->tuple[pd.DataFrame,MinMaxScaler]: #funcio extraida de la practica 4 Linear Regression
     """Escala los datos numericos de X y los devuelve escalados y con su escalador.
     
     Prec: X no debe tener variables categoricas ni NA's
 
     :param: scaler: se debe indicar el utilizado en los datos de train cuando se utilicen los de test
+
+    :param: scale_seq_ctrl si es True realiza el escalado cos y sin
     """
     print('Original shape:{}'.format(X.shape))
-    categorical_columns = X.dtypes[X.dtypes == 'category'].index.values
+    if scale_seq_ctrl:
+        categorical_columns = ["seq_ctrl","seq_ctrl_sin","seq_ctrl_sin"]
+        X["seq_ctrl_sin"] = np.sin(2 * np.pi * X["seq_ctrl"] / 65535)
+        X["seq_ctrl_cos"] = np.cos(2 * np.pi * X["seq_ctrl"] / 65535)
+        X.drop(columns=["seq_ctrl"],inplace=True)
+    else:
+        categorical_columns = []
     numerical_columns = [c for c in X.columns if c not in categorical_columns]
     # Solo escalamos la columna numerica
     numerical_columns = [c for c in X.columns if c not in categorical_columns]
@@ -396,20 +439,20 @@ def df_train_test_split(df:pd.DataFrame,test_size:float=0.25,seed:int=SEED)->tup
 # %%
 #csi_filtered
 X_train_filtered, X_test_filtered, y_train_filtered, y_test_filtered = df_train_test_split(csi_filtered)
-X_train_filtered, scaler_filtered = scaling_preprocessing(X_train_filtered)
-X_test_filtered, _ = scaling_preprocessing(X_test_filtered,scaler_filtered)
+X_train_filtered, scaler_filtered = scaling_preprocessing(X_train_filtered,scale_seq_ctrl=SEQ_CTRL_SCALED)
+X_test_filtered, _ = scaling_preprocessing(X_test_filtered,scaler_filtered,scale_seq_ctrl=SEQ_CTRL_SCALED)
 
 # %%
 #csi_uncorr
 X_train_uncorr, X_test_uncorr, y_train_uncorr, y_test_uncorr = df_train_test_split(csi_uncorr)
-X_train_uncorr, scaler_uncorr = scaling_preprocessing(X_train_uncorr)
-X_test_uncorr, _ = scaling_preprocessing(X_test_uncorr,scaler_uncorr)
+X_train_uncorr, scaler_uncorr = scaling_preprocessing(X_train_uncorr,scale_seq_ctrl=SEQ_CTRL_SCALED)
+X_test_uncorr, _ = scaling_preprocessing(X_test_uncorr,scaler_uncorr,scale_seq_ctrl=SEQ_CTRL_SCALED)
 
 # %%
 #csi_filter_plus
 X_train_filter_plus, X_test_filter_plus, y_train_filter_plus, y_test_filter_plus = df_train_test_split(csi_filter_plus)
-X_train_filter_plus, scaler_filter_plus = scaling_preprocessing(X_train_filter_plus)
-X_test_filter_plus, _ = scaling_preprocessing(X_test_filter_plus,scaler_filter_plus)
+X_train_filter_plus, scaler_filter_plus = scaling_preprocessing(X_train_filter_plus,scale_seq_ctrl=SEQ_CTRL_SCALED)
+X_test_filter_plus, _ = scaling_preprocessing(X_test_filter_plus,scaler_filter_plus,scale_seq_ctrl=SEQ_CTRL_SCALED)
 
 # %%
 #csi_pca
@@ -424,33 +467,32 @@ X_train_angle_pca.shape
 # %%
 #csi_filter_plus_uncorr
 X_train_filter_plus_uncorr, X_test_filter_plus_uncorr, y_train_filter_plus_uncorr, y_test_filter_plus_uncorr = df_train_test_split(csi_filter_plus_uncorr)
-X_train_filter_plus_uncorr, scaler_filter_plus_uncorr = scaling_preprocessing(X_train_filter_plus_uncorr)
-X_test_filter_plus_uncorr, _ = scaling_preprocessing(X_test_filter_plus_uncorr,scaler_filter_plus_uncorr)
+X_train_filter_plus_uncorr, scaler_filter_plus_uncorr = scaling_preprocessing(X_train_filter_plus_uncorr,scale_seq_ctrl=SEQ_CTRL_SCALED)
+X_test_filter_plus_uncorr, _ = scaling_preprocessing(X_test_filter_plus_uncorr,scaler_filter_plus_uncorr,scale_seq_ctrl=SEQ_CTRL_SCALED)
 
 
 # %% [markdown]
 # ### Balancejar el dataset
 # Com que hem considerat qu'el dataset estaba balancejat perquè no hi havien grans diferencies per les classes, amb això acabem el Dataset Cleaning, ara comencarem a entrenar models.
 
-# %%
-
-
 # %% [markdown]
 # ### Funcions per l'exportació a Kaggle
+# 
+# Es tractan de funcions per convertir les dades de test de Kaggle el mateix format dels diferents datasets i escriure en un fitxer les prediccions de la variable position
 
 # %%
 #funcions per transformar csi_final_test per que sigui com X i y (trasnformacions i reduccions de variables inclosas)
-def final_test_filtered(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filtered,columns_to_drop:list[str]=carriers_0)->pd.DataFrame:
+def final_test_filtered(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filtered,columns_to_drop:list[str]=carriers_0,scale_seq_ctrl:bool=SEQ_CTRL_SCALED)->pd.DataFrame:
     """Retorna un Dataframe apte per predir segons les transformacions de filtered.
     
     Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
     df = df_raw.drop(columns="ID")
     df.drop(columns=columns_to_drop,inplace=True) # fem un drop de les I's i Q's igual a 0
-    X_final_test, _ = scaling_preprocessing(df,scaler)
+    X_final_test, _ = scaling_preprocessing(df,scaler,scale_seq_ctrl=scale_seq_ctrl)
     return X_final_test
 
 # %%
-def final_test_uncorr(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_uncorr,columns_to_drop:list[str]=carriers_0 + vars_to_drop_uncorr)->pd.DataFrame:
+def final_test_uncorr(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_uncorr,columns_to_drop:list[str]=carriers_0 + vars_to_drop_uncorr,scale_seq_ctrl:bool=SEQ_CTRL_SCALED)->pd.DataFrame:
     """Retorna un Dataframe apte per predir segons les transformacions de uncorr.
     
     Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
@@ -458,17 +500,18 @@ def final_test_uncorr(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=sca
     df.drop(columns=columns_to_drop[:48],inplace=True) # fem un drop de les I's i Q's igual a 0
     complex_conversion(df)
     df.drop(columns=columns_to_drop[48:],inplace=True) #treim les variable no correlades
-    X_final_test, _ = scaling_preprocessing(df,scaler)
+    X_final_test, _ = scaling_preprocessing(df,scaler,scale_seq_ctrl=scale_seq_ctrl)
     return X_final_test
 
 # %%
-def final_test_filter_plus(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filter_plus,columns_to_drop:list[str]=carriers_0 + vars_to_drop_filter_plus)->pd.DataFrame:
+def final_test_filter_plus(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filter_plus,columns_to_drop:list[str]=carriers_0 + vars_to_drop_filter_plus,
+                           scale_seq_ctrl:bool=SEQ_CTRL_SCALED)->pd.DataFrame:
     """Retorna un Dataframe apte per predir segons les transformacions de filter_plus.
     
     Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
     df = df_raw.drop(columns="ID")
     df.drop(columns=columns_to_drop,inplace=True)
-    X_final_test, _ = scaling_preprocessing(df,scaler)
+    X_final_test, _ = scaling_preprocessing(df,scaler,scale_seq_ctrl=scale_seq_ctrl)
     return X_final_test
 
 
@@ -497,20 +540,17 @@ def final_test_angle_pca(df_raw:pd.DataFrame=csi_final_test,columns_to_drop:list
 
 
 # %%
-len(carriers_0) + len(vars_to_drop_filtered_plus_uncorr_1)
-
-# %%
 def final_test_filter_plus_uncorr(df_raw:pd.DataFrame=csi_final_test,scaler:MinMaxScaler=scaler_filter_plus_uncorr,
                                   columns_to_drop:list[str]=carriers_0 + vars_to_drop_filtered_plus_uncorr_1 + vars_to_drop_filtered_plus_uncorr_2,
-                                  rangs:tuple[list[int],list[int],list[int],list[int]]=rangos)->pd.DataFrame:
+                                  scale_seq_ctrl:bool=SEQ_CTRL_SCALED)->pd.DataFrame:
     """Retorna un Dataframe apte per predir segons les transformacions de filter_plus_uncorr.
     
     Prec: No cal incloure 'ID' a columns_to_drop, ja ho fa automaticament"""
     df = df_raw.drop(columns="ID")
     df.drop(columns=columns_to_drop[:183],inplace=True) # fem un drop de les I's i Q's igual a 0 i variables de min_info_mutua
-    complex_conversion(df,rangs)
+    complex_conversion(df)
     df.drop(columns=columns_to_drop[183:],inplace=True) #treim les variable no correlades
-    X_final_test, _ = scaling_preprocessing(df,scaler)
+    X_final_test, _ = scaling_preprocessing(df,scale_seq_ctrl=scale_seq_ctrl)
     return X_final_test
 
 # %%
@@ -523,9 +563,6 @@ def output_submission(y:np.ndarray,filename:str="out")->None:
         for i in range(len(y)):
             print(f"{i},{y[i]}",file=f)
     print("Fitxer d'output generat")
-
-# %%
-
 
 # %% [markdown]
 # # Seleccio de Dades per l'entrenament
@@ -545,6 +582,9 @@ def dataset_iterator(x_train:list[pd.DataFrame]=[X_train_filtered, X_train_uncor
 
 # %%
 select_dataset = dataset_iterator() #crea el iterador de datasets
+
+# %%
+best_datasets_result_df = pd.DataFrame(index=[], columns= ['Classifier','Accuracy', 'F1 Macro', 'Precision Macro', 'Recall Macro'])
 
 # %%
 #Cada cop que s'executa aquest bloc s'escull el seguent dataset de la llista, si retorna error es qu'acabat i heu de tornar a excutar el codi d'a dalt
@@ -571,6 +611,17 @@ results_df.loc['LDA',:] = cross_val_results[['test_accuracy', 'test_f1_macro',
 results_df #scores de validacio
 
 # %%
+#LDA Separacio aplicada graficament
+X_transformed = lda.transform(X_train)
+
+X_transformed = pd.DataFrame(X_transformed)
+X_transformed['labels'] = y_train.reset_index(drop=True)
+X_transformed
+
+# %%
+sn.scatterplot(x= 0, y= 1, data = X_transformed, hue='labels',palette="coolwarm")
+
+# %%
 #TEST (No Final), executar despres de validacio de tots els models
 y_test_lda_pred = lda.predict(X_test)
 
@@ -589,25 +640,8 @@ disp_lda.plot(ax=axs)
 
 axs.set_title('LDA')
 
-# %%
-#LDA Separacio aplicada graficament
-X_transformed = lda.transform(X_train)
-
-X_transformed = pd.DataFrame(X_transformed)
-X_transformed['labels'] = y_train.reset_index(drop=True)
-X_transformed
-
-# %%
-sn.scatterplot(x= 0, y= 1, data = X_transformed, hue='labels',palette="coolwarm")
-
-# %%
-
-
 # %% [markdown]
 # ## 2.QDA
-
-# %%
-#reg_param_values = [0, 0.0001, 0.001, 0.1, 1]
 
 # %%
 #Validacio d'hiperparametres
@@ -630,7 +664,7 @@ results_qda_df
 
 # %%
 best_reg_param = results_qda_df["reg_param"][0]
-print(f"The best value for reg_param is {best_reg_param}.") #aquest valor es el bo, ull perque al df a vegades fa un round quan ho mostras
+print(f"The best value for reg_param is {best_reg_param}.") #aquest valor es el bo, ull perque el que mostra el dataframe a vegades fa un round quan ho mostras
 
 # %%
 qda = QuadraticDiscriminantAnalysis(reg_param=best_reg_param)
@@ -664,12 +698,6 @@ fig, axs = plt.subplots(figsize=(12, 4))
 disp_qda.plot(ax=axs)
 
 axs.set_title('QDA')
-
-# %%
-
-
-# %%
-
 
 # %% [markdown]
 # ## 3.Naive-Bayes Classifier
@@ -718,20 +746,8 @@ disp_naive.plot(ax=axs)
 
 axs.set_title('Naive-Bayes')
 
-# %%
-
-
 # %% [markdown]
-# ## 4.Neural Probabilistic Classifier
-
-# %%
-
-
-# %% [markdown]
-# ## 5.K-NN
-
-# %%
-#[1, 3, 5, 7, 10, 15, 20]
+# ## 4.K-NN
 
 # %%
 knn = KNeighborsClassifier()
@@ -782,45 +798,104 @@ results_df
 
 # %%
 #TEST (No Final), executar despres de validacio de tots els models
+knn_model = KNeighborsClassifier(n_neighbors=best_n_neighbors, metric=best_metric)
+knn_model.fit(X_train, y_train)
+y_pred_knn = knn_model.predict(X_test)
+accuracy_knn = accuracy_score(y_test, y_pred_knn)
+f1_knn = f1_score(y_test, y_pred_knn,average='macro')
+
+# %%
+accuracy_knn
+
+# %%
+f1_knn
 
 # %% [markdown]
-# ## 6.Logistic Regression
+# ## 5.Logistic Regression
 
 # %%
-#es pot escollir:
-# solvers: ['lbfgs','liblinear','newton-cg','newton-cholesky','sag','saga']
-#tol (precisio de quan es considera 0)
-#penalty: ['l1', 'l2', 'elasticnet']
-#Cs pot ser una llista de floats o un enter (pel cas de l'enter es una serie de nombres entre 1e-4 i 1e4)
-
-# %%
-logreg = LogisticRegressionCV(Cs=20, random_state=SEED, cv=5, scoring = 'accuracy', l1_ratios=0,solver = 'lbfgs')
+logreg = LogisticRegressionCV(Cs=20, random_state=SEED, cv=5, scoring = 'accuracy', l1_ratios=[0],solver = 'lbfgs',use_legacy_attributes=False)
 
 logreg.fit(X_train, y_train)
 
 # %%
-avg_crossval_scores = logreg.scores_['normal'].mean(axis=0)
+avg_crossval_scores = logreg.scores_.mean(axis=0)
 idx = np.argmax(avg_crossval_scores)
 best_C = logreg.Cs_[idx]
 print(f'The best value for C is {best_C}.')
 
 # %%
+logreg = LogisticRegression(C=best_C, l1_ratio=0)
+cross_val_results = pd.DataFrame(cross_validate(logreg, X_train, y_train, cv = 5, scoring = ['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'] ))
 
+results_df.loc['Logistic Regression',:] = cross_val_results[['test_accuracy', 'test_f1_macro',
+       'test_precision_macro', 'test_recall_macro']].mean().values
+
+results_df.sort_values(by='Accuracy', ascending=False)
 
 # %%
-
+#TEST (No Final), executar despres de validacio de tots els models
+logreg = LogisticRegression(C=best_C, l1_ratio=0)
+logreg.fit(X_train, y_train)
+y_pred_logreg = logreg.predict(X_test)
+accuracy_logreg = accuracy_score(y_test, y_pred_logreg)
+f1_logreg = f1_score(y_test, y_pred_logreg,average='macro')
 
 # %%
+accuracy_logreg
 
+# %%
+f1_logreg
 
 # %% [markdown]
-# ## 7.SVM
+# ## 6.SVM
 
 # %%
 #Si C es massa gran pot-hi haver overfitting
 
 # %%
-svm = SVC(kernel='rbf', C=100.0, gamma=0.1, random_state=SEED) #C=10.0, gamma ='scale'
+#Setup de posibles valors dels hiperparametres
+p_grid = {"C": [1, 10,50, 100], "gamma": [0.001,0.01, 0.1]}
+
+# Utilitzem Support Vector Classifier amb "rbf" kernel
+svm = SVC(kernel="rbf")
+
+
+inner_cv = KFold(n_splits=5, shuffle=True, random_state=SEED)
+
+
+clf = GridSearchCV(estimator=svm, param_grid=p_grid,scoring=['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'], cv=inner_cv,refit=False)
+clf.fit(X_train, y_train)
+results_svc_df = pd.DataFrame(clf.cv_results_)
+
+# %%
+results_svc_df.columns
+
+# %%
+cols = ['param_C', 'param_gamma',
+     'mean_test_accuracy',
+    'mean_test_f1_macro', 'mean_test_precision_macro',
+    'mean_test_recall_macro', 
+    'std_test_accuracy', 'std_test_f1_macro', 'std_test_precision_macro',
+    'std_test_recall_macro'
+]
+results_svc_df_proc = results_svc_df[cols].sort_values(by='mean_test_accuracy',ascending=False).reset_index(drop=True)
+results_svc_df_proc
+
+# %%
+best_Cs = results_svc_df_proc["param_C"][0]
+best_gamma = results_svc_df_proc["param_gamma"][0]
+print(f'The best set of parameters is C={best_Cs} and gamma={best_gamma}.')
+
+# %%
+#Afegim resultats a la Taula
+results_df.loc['SVC',:] = results_svc_df_proc.loc[0, ['mean_test_accuracy', 'mean_test_f1_macro',
+       'mean_test_precision_macro', 'mean_test_recall_macro']].values
+results_df
+
+# %%
+#TEST (No Final), executar despres de validacio de tots els models
+svm = SVC(kernel='rbf', C=best_Cs, gamma=best_gamma, random_state=SEED)
 svm.fit(X_train, y_train)
 
 y_pred_svm = svm.predict(X_test)
@@ -843,34 +918,68 @@ disp_svm.plot(ax=axs)
 
 axs.set_title('SVM')
 
-# %%
-svm = SVC()
-svm.fit(X_train,y_train)
+# %% [markdown]
+# ## 7.Random forest
 
-scores = cross_validate(svm, X_train, y_train, cv=5, scoring=['accuracy', 'recall_macro', 'precision_macro', 'f1_macro'])
-results_df.loc['SVM-default',:] = [scores['test_accuracy'].mean(), scores['test_recall_macro'].mean(),
-    scores['test_precision_macro'].mean(), scores['test_f1_macro'].mean()]
+# %%
+rf = RandomForestClassifier(
+    n_estimators=200,
+    random_state=SEED,
+    n_jobs=-1
+)
+
+param_grid = {
+    "max_depth": [None, 10, 20, 30],
+    "min_samples_split": [2, 5, 10],
+    "min_samples_leaf": [1, 2, 4],
+    "max_features": ["sqrt", "log2"]
+}
+
+inner_cv = KFold(n_splits=5, shuffle=True, random_state=SEED)
+
+clf = GridSearchCV(
+    estimator=rf,
+    param_grid=param_grid,
+    scoring=['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'],
+    cv=inner_cv,
+    refit=False,
+    n_jobs=-1
+)
+
+clf.fit(X_train, y_train)
+results_rf_df = pd.DataFrame(clf.cv_results_)
+
+# %%
+results_rf_df.columns
+
+# %%
+cols = ['param_max_depth', 'param_max_features','param_min_samples_leaf','param_min_samples_split',
+     'mean_test_accuracy',
+    'mean_test_f1_macro', 'mean_test_precision_macro',
+    'mean_test_recall_macro', 
+    'std_test_accuracy', 'std_test_f1_macro', 'std_test_precision_macro',
+    'std_test_recall_macro'
+]
+results_rf_df_proc = results_rf_df[cols].sort_values(by='mean_test_accuracy',ascending=False).reset_index(drop=True)
+results_rf_df_proc
+
+# %%
+best_max_depth= results_rf_df_proc["param_max_depth"][0]
+best_max_features = results_rf_df_proc["param_max_features"][0]
+best_min_samples_leaf = results_rf_df_proc["param_min_samples_leaf"][0]
+best_min_samples_split = results_rf_df_proc["param_min_samples_split"][0]
+print(f'The best set of parameters are max_depth = {best_max_depth}, max_features = {best_max_features}, min_samples_leaf = {best_min_samples_leaf} and min_samples_split = {best_min_samples_split}.')
+
+# %%
+#Afegim resultats a la Taula
+results_df.loc['RandomForest',:] = results_rf_df_proc.loc[0, ['mean_test_accuracy', 'mean_test_f1_macro',
+       'mean_test_precision_macro', 'mean_test_recall_macro']].values
 results_df
 
 # %%
-svm = SVC(class_weight='balanced')
-svm.fit(X_train,y_train)
-
-scores = cross_validate(svm, X_train, y_train, cv=5, scoring=['accuracy', 'recall_macro', 'precision_macro', 'f1_macro'])
-results_df_2.loc['SVM-balanced',:] = [scores['test_accuracy'].mean(), scores['test_recall_macro'].mean(),
-    scores['test_precision_macro'].mean(), scores['test_f1_macro'].mean()]
-results_df_2 = results_df.sort_values(by="F1-score (mean)", ascending=False)
-results_df_2
-
-
-# %%
-
-
-# %% [markdown]
-# ## 8.Random forest and Gradient boosting
-
-# %%
-rf_model = RandomForestClassifier(n_estimators=200, max_depth=30, random_state=SEED, n_jobs=-1)
+#TEST (No Final), executar despres de validacio de tots els models
+rf_model = RandomForestClassifier(n_estimators=200, max_depth=best_max_depth, max_features= best_max_features, min_samples_leaf=best_min_samples_leaf,
+                                  min_samples_split=best_min_samples_split, random_state=SEED, n_jobs=-1)
 rf_model.fit(X_train, y_train)
 
 y_pred_rf = rf_model.predict(X_test)
@@ -885,7 +994,23 @@ acc_rf
 # %%
 f1_rf
 
+# %% [markdown]
+# ## 8. Gradient boosting
+# Pel gradient boosting com es un classificador que triga molt més qu'els altres, ho farem amb cross validate i els hiperparametres ja els hem fixat a ma
+
 # %%
+gb_model = GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=3, random_state=SEED)
+
+cross_val_results = pd.DataFrame(cross_validate(gb_model, X_train, y_train, cv = 5, scoring = ['accuracy', 'f1_macro', 'precision_macro', 'recall_macro'] ))
+
+results_df.loc['GradientBoosting',:] = cross_val_results[['test_accuracy', 'test_f1_macro',
+       'test_precision_macro', 'test_recall_macro']].mean().values
+
+# %%
+results_df
+
+# %%
+#TEST (No Final), executar despres de validacio de tots els models
 gb_model = GradientBoostingClassifier(n_estimators=150, learning_rate=0.1, max_depth=3, random_state=SEED)
 gb_model.fit(X_train, y_train)
 
@@ -900,49 +1025,83 @@ acc_gb
 f1_gb
 
 # %% [markdown]
-# ## 9.Mirar més métodes a la resta de transpas
+# ## Emmagatzematge dels millors models per a cada dataset
 
 # %%
-results_df #filtered
+#Guardem la imatge dels resultats del dataframe
+fig, ax = plt.subplots(figsize=(8, 3))
+ax.axis('off')
+table = ax.table(cellText=results_df.values,
+                 colLabels=results_df.columns,
+                 rowLabels=results_df.index,
+                 loc='center')
+plt.title(f"Resultats models amb dataset {nom_dataset_selected}", fontsize=14, fontweight='bold', pad=20)
+plt.savefig(f"results_df_{nom_dataset_selected}.png", bbox_inches='tight', dpi=300)
 
 # %%
-results_df
+results_df.sort_values(by='F1 Macro',ascending=False) #ordenem per F1 Macro i ho emagatzemem a
 
 # %%
+#Emagatzemem el resultat al dataframe de millors resultats per dataframe
+best_result = results_df.sort_values(by='F1 Macro',ascending=False).iloc[0]
+best_datasets_result_df.loc[nom_dataset_selected,:] = np.concatenate(([best_result.name], best_result.values))
+best_datasets_result_df
 
+# %% [markdown]
+# Ara cal tornar a executar tots els metodes per el seguents datasets fins arribar al final. Un cop arribats:
+
+# %%
+#Guardem la imatge dels resultats del dataframe
+fig, ax = plt.subplots(figsize=(8, 3))
+ax.axis('off')
+table = ax.table(cellText=best_datasets_result_df.values,
+                 colLabels=best_datasets_result_df.columns,
+                 rowLabels=best_datasets_result_df.index,
+                 loc='center')
+plt.title(f"Millors resultats models per a cada dataset", fontsize=14, fontweight='bold', pad=20)
+plt.savefig(f"best_results_df.png", bbox_inches='tight', dpi=300)
 
 # %% [markdown]
 # ## 10. Execució sobre Final Test i Exportar resultats
+# Ens quedem amb el millor model i dataset
 
 # %%
-model = svm #exemple
-y_final_pred = model.predict(X_final_test)
+best_datasets_result_df.sort_values(by='F1 Macro',ascending=False).iloc[0]
+
+# %%
+#Seleccionem el millor model
+X_train, X_test, y_train, y_test, X_final_test,nom_dataset_selected = X_train_filtered, X_test_filtered, y_train_filtered, y_test_filtered, final_test_filtered(), "csi_filtered"
+
+# %%
+#Resultat sobre la Particio Test de les dades de train
+best_C = 100
+best_gamma = 0.1
+svm = SVC(kernel='rbf', C=best_Cs, gamma=best_gamma, random_state=SEED)
+svm.fit(X_train, y_train)
+
+y_pred_svm = svm.predict(X_test)
+accuracy_svm = accuracy_score(y_test, y_pred_svm)
+f1_svm = f1_score(y_test, y_pred_svm, average="macro")
+
+print(f"Obtenim una Accuracy de {accuracy_svm} i un F1-score de {f1_svm}")
+
+# %%
+#Entrenem sobre tot el dataset de Train
+X_full_train = pd.concat([X_train,X_test])
+y_full_train = pd.concat([y_train,y_test])
+
+best_C = 100
+best_gamma = 0.1
+svm = SVC(kernel='rbf', C=best_Cs, gamma=best_gamma, random_state=SEED)
+svm.fit(X_full_train, y_full_train)
+
+# %%
+#Prediccio final pel kaggle
+y_final_pred = svm.predict(X_final_test)
 y_final_pred
 
 
 # %%
-output_submission(y_final_pred)
-
-# %% [markdown]
-# # Temporal Cache de Dades (eliminar al final)
-# A continuacio hi han alguns plots que vam fer durant l'AED però qu'al final no vam utilitzar 
-
-# %%
-sn.pairplot(data=csi[["seq_ctrl","aoa","rssi1","rssi2","position", "I1_1", "Q1_1", "I63_1", "Q63_1", "I1_2", "Q1_2", "I63_2", "Q63_2"]], hue='position',palette="coolwarm")
-
-# %% [markdown]
-# Observem algunes relacions lineals entre variables I_x_n, anem a fer un correlation plot de totes les variables I_x_1 $\neq 0$
-
-# %%
-I_1 = ["position"] + [f"I{i}_1" for i in range(1,27)] + [f"I{i}_1" for i in range(38,64)]
-
-# %%
-sn.pairplot(data=csi[I_1])
-
-# %% [markdown]
-# Observem que per les I_x_1 que son aprop (diferencia de la x no molt gran), la relació sembla ser lineal, però quan es comença a allunyar aquesta relació lineal es perd.
-
-# %%
-#podria ser que I_x fossi una time series d'algo del wifi?
+output_submission(y_final_pred,"final_prediction")
 
 
